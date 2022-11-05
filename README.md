@@ -1,2 +1,1 @@
-# nerel-quantized
-Evaluation of Huggingface quantization for NER task
+# Evaluation of BERT quantization for Named Entity Recognition
