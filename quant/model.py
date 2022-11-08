@@ -168,7 +168,10 @@ class SpanNERModel(SerializableModel):
         return batch_encoding.encodings
 
     def forward(self, examples: BatchedExamples, labels: Optional[LongTensor] = None) -> Union[Tuple[Tensor, Tensor], Tensor]:
-        encoded: BaseModelOutput = self._encoder(input_ids=examples.input_ids, attention_mask=examples.padding_mask)
+        encoded: BaseModelOutput = self._encoder(
+            input_ids=examples.input_ids.to(self.device),
+            attention_mask=examples.padding_mask.to(self.device)
+        )
         representation: Tensor = self._dropout(encoded['last_hidden_state'])  # (B, L, F)
 
         category_scores = self._transition(representation.unsqueeze(1))  # (B, C, L, F)

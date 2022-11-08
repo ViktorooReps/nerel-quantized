@@ -91,12 +91,12 @@ if __name__ == '__main__':
     categories = collect_categories(dataset_args.dataset_dir)
     model = SpanNERModel(model_args, categories)
 
-    train_dataset = NERDataset(list(read_nerel(
+    train_dataset = NERDataset(read_nerel(
         dataset_args.dataset_dir, DatasetType.TRAIN, model.tokenize, model.category_mapping, model.no_entity_category
-    ))[:10])
-    dev_dataset = NERDataset(list(read_nerel(
+    ))
+    dev_dataset = NERDataset(read_nerel(
         dataset_args.dataset_dir, DatasetType.DEV, model.tokenize, model.category_mapping, model.no_entity_category
-    ))[:10])
+    ))
 
     trainer = Trainer(
         model=model,
