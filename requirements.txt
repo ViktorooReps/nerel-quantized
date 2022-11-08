@@ -1,5 +1,6 @@
-numpy==1.23.4
-torch==1.13.0
-transformers==4.24.0
-onnxruntime==1.13.1
-onnxruntime-tools==1.7.0
+numpy
+torch
+transformers
+onnxruntime
+onnxruntime-tools
+scikit-learn
