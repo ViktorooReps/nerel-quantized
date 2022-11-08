@@ -1,17 +1,17 @@
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from itertools import chain, starmap
 from pathlib import Path
-from typing import NamedTuple, Optional, Tuple, Iterable, List, Set, Dict, Callable, DefaultDict
+from typing import NamedTuple, Optional, Tuple, Iterable, List, Set, Dict, Callable, Union
 
 import torch
 from torch import LongTensor, BoolTensor
 from torch.nn.utils.rnn import pad_sequence
 from transformers.tokenization_utils_base import EncodingFast
 
+from quant.utils import pad_images
 
 logger = logging.getLogger(__name__)
 
@@ -26,20 +26,25 @@ class TypedSpan(NamedTuple):
 class Example:
     text_id: int
     example_start: int
-    input_ids: LongTensor  # shape: (SEQUENCE_LENGTH)
-    target_label_ids: Optional[LongTensor]  # shape: (NUM_CATEGORIES, SEQUENCE_LENGTH)
+    input_ids: LongTensor  # shape: (LENGTH)
+    target_label_ids: Optional[LongTensor]  # shape: (LENGTH, LENGTH)
 
 
 @dataclass
 class BatchedExamples:
     text_ids: Tuple[int, ...]
     example_starts: Tuple[int, ...]
-    input_ids: LongTensor  # shape: (BATCH_SIZE, SEQUENCE_LENGTH)
-    padding_mask: BoolTensor  # shape: (BATCH_SIZE, SEQUENCE_LENGTH)
-    target_label_ids: Optional[LongTensor]  # shape: (BATCH_SIZE, NUM_CATEGORIES, SEQUENCE_LENGTH)
+    input_ids: LongTensor  # shape: (BATCH_SIZE, LENGTH)
+    padding_mask: BoolTensor  # shape: (BATCH_SIZE, LENGTH)
 
 
-def collate_examples(examples: Iterable[Example]) -> BatchedExamples:
+def collate_examples(
+        examples: Iterable[Example],
+        *,
+        padding_id: int = -100,
+        pad_length: Optional[int] = None
+) -> Dict[str, Union[BatchedExamples, Optional[LongTensor]]]:
+
     all_text_ids: List[int] = []
     all_example_starts: List[int] = []
     all_input_ids: List[LongTensor] = []
@@ -65,16 +70,18 @@ def collate_examples(examples: Iterable[Example]) -> BatchedExamples:
         if example.target_label_ids is not None:
             target_label_ids.append(example.target_label_ids)
 
-    return BatchedExamples(
-        tuple(all_text_ids),
-        tuple(all_example_starts),
-        pad_sequence(all_input_ids, batch_first=True, padding_value=-100).long(),
-        pad_sequence(all_padding_masks, batch_first=True, padding_value=False).bool(),
-        pad_sequence(target_label_ids, batch_first=True, padding_value=-100) if not no_target_label_ids else None
-    )
+    return {
+        'examples': BatchedExamples(
+            tuple(all_text_ids),
+            tuple(all_example_starts),
+            pad_sequence(all_input_ids, batch_first=True, padding_value=padding_id).long(),
+            pad_sequence(all_padding_masks, batch_first=True, padding_value=False).bool()
+        ),
+        'labels': pad_images(target_label_ids, padding_value=-100, padding_length=pad_length) if not no_target_label_ids else None
+    }
 
 
-def batch_examples(examples: Iterable[Example], *, batch_size: int = 1) -> Iterable[BatchedExamples]:
+def batch_examples(examples: Iterable[Example], *, batch_size: int = 1) -> Iterable[Tuple[BatchedExamples, LongTensor]]:
     """Groups examples into batches."""
     curr_batch = []
     for example in examples:
@@ -92,7 +99,7 @@ def convert_to_examples(
         text_id: int,
         encoding: EncodingFast,
         category_mapping: Dict[str, int],
-        label_mapping: Dict[str, int],
+        no_entity_category: str,
         *,
         max_length: int = 512,
         entities: Optional[Set[TypedSpan]] = None,
@@ -103,49 +110,21 @@ def convert_to_examples(
 
     target_label_ids: Optional[LongTensor] = None
     if entities is not None:
-        # group entities into categories
-        category_spans: DefaultDict[str, Set[Tuple[int, int]]] = defaultdict(set)
-        for start, end, type_ in entities:
-            category_spans[type_].add((start, end))
+        token_start_mapping = {}
+        token_end_mapping = {}
+        for token_idx, (token_start, token_end) in enumerate(encoding.offsets):
+            token_start_mapping[token_start] = token_idx
+            token_end_mapping[token_end] = token_idx
 
-        # by default set every label to O
-        num_categories = len(category_mapping)
-        target_label_ids: LongTensor = torch.full((num_categories, sequence_length), fill_value=label_mapping['O'], dtype=torch.long).long()
-
-        # collect mappings (position in text) -> (position in label_ids)
-        token_start_mapping: Dict[int, int] = {}
-        token_end_mapping: Dict[int, int] = {}
-        for token_position, (orig_start, orig_end) in enumerate(encoding.offsets):
-            token_start_mapping[orig_start] = token_position
-            token_end_mapping[orig_end] = token_position + 1
-
-        def filter_non_intersecting(spans_: Iterable[Tuple[int, int]]) -> Iterable[Tuple[int, int]]:
-            """Filter non-intersecting spans and sort by span start."""
-            spans_ = sorted(spans_)
-            prev_end = 0
-            for s_start, s_end in spans_:
-                if s_start < prev_end:
-                    logger.warning(f'Removed intersecting spans for {category} category!')
-                    continue
-                yield s_start, s_end
-                prev_end = s_end
-
-        def is_entity_label_id(label_id: int):
-            return label_id == label_mapping['I'] or label_id == label_mapping['B']
-
-        for category, spans in category_spans.items():
-            category_id = category_mapping[category]
-            category_label_ids = target_label_ids[category_id]
-
-            for span_start, span_end in filter_non_intersecting(spans):
-                span_start_position = token_start_mapping[span_start]
-                span_end_position = token_end_mapping[span_start]
-
-                category_label_ids[span_start_position:span_end_position] = label_mapping['I']
-
-                # add B to separate (following the IOB scheme)
-                if span_start_position and is_entity_label_id(category_label_ids[span_start_position - 1]):
-                    category_label_ids[span_start_position] = label_mapping['B']
+        text_length = len(encoding.ids)
+        target_label_ids = torch.full((text_length, text_length), fill_value=category_mapping[no_entity_category], dtype=torch.long).long()
+        for start, end, category in entities:
+            token_start = token_start_mapping[start]
+            try:
+                token_end = token_end_mapping[end]
+            except KeyError:  # for some reason some ends are shifted by one
+                token_end = token_end_mapping[end + 1]
+            target_label_ids[token_start][token_end] = category_mapping[category]
 
     # split encoding into max_length-token chunks
 
@@ -155,8 +134,8 @@ def convert_to_examples(
         yield Example(
             text_id,
             chunk_start,
-            encoding.ids[chunk_start:chunk_end],
-            target_label_ids[chunk_start:chunk_end] if target_label_ids is not None else None
+            torch.tensor(encoding.ids[chunk_start:chunk_end], dtype=torch.long).long(),
+            target_label_ids[chunk_start:chunk_end, chunk_start:chunk_end] if target_label_ids is not None else None
         )
         chunk_start = chunk_end
 
@@ -174,64 +153,28 @@ def convert_all_to_examples(
     return chain.from_iterable(starmap(converter, enumerate(encodings)))
 
 
-def decode(encoding: EncodingFast, labels: Iterable[str], category: str) -> Set[TypedSpan]:
-    """Decodes examples following IOB labelling strategy."""
-    entity_start: Optional[int] = None
-    entities: Set[TypedSpan] = set()
-
-    token_end = None
-    for label, (token_start, token_end) in zip(labels, encoding.offsets):
-        if label == 'B':
-            if entity_start is not None:
-                entity_end = token_start
-                entities.add(TypedSpan(entity_start, entity_end, category))
-            entity_start = token_start
-            continue
-
-        if label == 'I':
-            if entity_start is None:
-                entity_start = token_start
-            continue
-
-        # label == 'O'
-        if entity_start is not None:
-            entity_end = token_start
-            entities.add(TypedSpan(entity_start, entity_end, category))
-            entity_start = None
-
-    if entity_start is not None:
-        entity_end = token_end
-        entities.add(TypedSpan(entity_start, entity_end, category))
-
-    return entities
-
-
 class DatasetType(str, Enum):
     TRAIN = 'train'
     DEV = 'dev'
     TEST = 'test'
 
 
-def get_label_mapping() -> Dict[str, int]:
-    return {'O': 0, 'I': 1, 'B': 2}  # IOB
-
-
 def read_annotation(annotation_file: Path) -> Set[TypedSpan]:
     collected_annotations: Set[TypedSpan] = set()
     with open(annotation_file) as f:
         for line in f:
-            type_, span_info, value = line.split('\t')
+            if line.startswith('T'):
+                _, span_info, value = line.strip().split('\t')
 
-            type_: str
-            if type_.startswith('T') and ';' not in span_info:  # skip multispan
-                category, start, end = span_info.split(' ')
-                collected_annotations.add(TypedSpan(int(start), int(end), category))
+                if ';' not in span_info:  # skip multispan
+                    category, start, end = span_info.split(' ')
+                    collected_annotations.add(TypedSpan(int(start), int(end), category))
 
     return collected_annotations
 
 
-def collect_category_mapping(dataset_dir: Path) -> Dict[str, int]:
-    dataset_dir = dataset_dir.joinpath(DatasetType.TRAIN)
+def collect_categories(dataset_dir: Path) -> Set[str]:
+    dataset_dir = dataset_dir.joinpath(DatasetType.TRAIN.value)
 
     if not dataset_dir.exists():
         raise RuntimeError(f'Dataset directory {dataset_dir} does not exist!')
@@ -246,8 +189,7 @@ def collect_category_mapping(dataset_dir: Path) -> Dict[str, int]:
     for document_annotations in all_annotations:
         all_categories.update(map(lambda span: span.type, document_annotations))
 
-    # noinspection PyTypeChecker
-    return dict(enumerate(all_categories))
+    return all_categories
 
 
 def read_nerel(
@@ -255,6 +197,7 @@ def read_nerel(
         dataset_type: DatasetType,
         tokenizer: Callable[[List[str]], List[EncodingFast]],
         category_mapping: Dict[str, int],
+        no_entity_category: str,
         *,
         exclude_filenames: Set[str] = None
 ) -> Iterable[Example]:
@@ -262,7 +205,7 @@ def read_nerel(
     if exclude_filenames is None:
         exclude_filenames = set()
 
-    dataset_dir = dataset_dir.joinpath(dataset_type)
+    dataset_dir = dataset_dir.joinpath(dataset_type.value)
 
     if not dataset_dir.exists():
         raise RuntimeError(f'Dataset directory {dataset_dir} does not exist!')
@@ -286,4 +229,4 @@ def read_nerel(
     encodings = tokenizer(all_texts)
 
     for text_id, (encoding, entities) in enumerate(zip(encodings, all_annotations)):
-        yield from convert_to_examples(text_id, encoding, category_mapping, get_label_mapping(), entities=entities)
+        yield from convert_to_examples(text_id, encoding, category_mapping, entities=entities, no_entity_category=no_entity_category)

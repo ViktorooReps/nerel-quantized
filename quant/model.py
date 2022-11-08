@@ -2,23 +2,22 @@ import logging
 import pickle
 from copy import deepcopy
 from dataclasses import dataclass, field
-from functools import partial
 from os import environ, cpu_count
 from pathlib import Path
-from typing import TypeVar, Tuple, Iterable, List, Type, Optional, Set, Dict
+from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
-import numpy as np
 import torch
-from torch import LongTensor, BoolTensor, Tensor, softmax
-from torch.nn import Linear, Module, Dropout, Parameter, ModuleList
+from torch import LongTensor, BoolTensor, Tensor
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d
 from torch.onnx import export
-from transformers import AutoModel, PreTrainedModel, AutoTokenizer, PreTrainedTokenizer, TensorType
+from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
 from transformers.convert_graph_to_onnx import quantize
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.tokenization_utils_base import EncodingFast
 
-from quant.datamodel import TypedSpan, batch_examples, decode, convert_all_to_examples, BatchedExamples
+from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples
+from quant.utils import invert, to_numpy
 
 # Constants from the performance optimization available in onnxruntime
 # It needs to be done before importing onnxruntime
@@ -41,7 +40,7 @@ class SerializableModel(Module):
 
     def __init__(self):
         super().__init__()
-        self._dummy_param = Parameter(torch.empty())
+        self._dummy_param = Parameter(torch.empty(0))
 
     @property
     def device(self) -> torch.device:
@@ -60,44 +59,6 @@ class SerializableModel(Module):
             return pickle.load(f)
 
 
-class PredictionsCollector:
-
-    def __init__(self, text_token_lengths: Iterable[int]):
-        self._text_predictions: List[LongTensor] = list(map(partial(np.full, fill_value=-1, dtype=int), text_token_lengths))
-
-    def add(self, text_id: int, start: int, predictions: LongTensor) -> None:
-        self._text_predictions[text_id][start:start + len(predictions)] = predictions
-
-    @property
-    def predictions(self) -> List[LongTensor]:
-        return self._text_predictions
-
-
-class DotProductAttention(Module):
-    """
-    Compute the dot products of the query with all values and apply a softmax function to obtain the weights on the values
-    """
-    def __init__(self):
-        super(DotProductAttention, self).__init__()
-
-    def forward(self, query: Tensor, value: Tensor) -> Tuple[Tensor, Tensor]:
-        batch_size, hidden_dim, input_size = query.size(0), query.size(2), value.size(1)
-
-        score = torch.bmm(query, value.transpose(1, 2))
-        attn = softmax(score.view(-1, input_size), dim=1).view(batch_size, -1, input_size)
-        context = torch.bmm(attn, value)
-
-        return context, attn
-
-
-_K = TypeVar('_K')
-_V = TypeVar('_V')
-
-
-def invert(d: Dict[_K, _V]) -> Dict[_V, _K]:
-    return {v: k for k, v in d.items()}
-
-
 @dataclass
 class ModelArguments:
     bert_model: str = field(metadata={'help': 'Name of the BERT HuggingFace model to use.'})
@@ -105,72 +66,98 @@ class ModelArguments:
     dropout: float = field(default=0.5, metadata={'help': 'Dropout for BERT representations.'})
 
 
-class NERModel(Module):
+class SpanNERModel(SerializableModel):
 
-    def __init__(self, model_args: ModelArguments, category_mapping: Dict[str, int], label_mapping: Dict[str, int]):
+    def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 100):
         super().__init__()
 
-        self._category_mapping = deepcopy(category_mapping)
-        self._category_id_mapping = invert(self._category_mapping)
+        self._no_entity_category = 'NO_ENTITY'
 
-        self._label_mapping = deepcopy(label_mapping)
-        self._label_id_mapping = invert(self._label_mapping)
+        categories.add(self._no_entity_category)
+        n_categories = len(categories)
+        # noinspection PyTypeChecker
+        self._category_id_mapping = dict(enumerate(categories))
+        self._category_mapping = invert(self._category_id_mapping)
+        self._no_entity_id = self._category_mapping[self._no_entity_category]
 
         self._tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_args.bert_model)
         self._encoder: PreTrainedModel = AutoModel.from_pretrained(model_args.bert_model)
-        self._encoder.config.return_dict = True
-
-        num_categories = len(self._category_mapping)
-        num_labels = len(self._label_mapping)
-
-        class ClassificationHead(Module):
-
-            def __init__(self):
-                super().__init__()
-                self._attention = DotProductAttention()
-                self._transition = Linear(728, num_labels)
-
-            def forward(self, features: Tensor) -> Tensor:
-                return self._transition(self._attention(features, features))
 
         self._dropout = Dropout(model_args.dropout)
+        self._transition = Conv2d(in_channels=1, out_channels=n_categories, kernel_size=(3, 1), padding=(1, 0))
 
-        # create separate head for each category
-        self._heads = ModuleList([ClassificationHead() for _ in range(num_categories)])
+        self._context_length = self._encoder.config.max_position_embeddings
+        positions = torch.arange(self._context_length)
+        start_positions = positions.view(self._context_length, 1).repeat(1, self._context_length)
+        end_positions = positions.view(1, self._context_length).repeat(self._context_length, 1)
+        self._spans = torch.cat([start_positions.unsqueeze(-1), end_positions.unsqueeze(-1)], dim=-1)  # (LENGTH, LENGTH, 2)
+
+        entity_lengths = end_positions - start_positions + 1
+        self._size_limit_mask = torch.triu((entity_lengths > 0) & (entity_lengths < limit_entity_length))
 
         self._optimized = False
+
+    @property
+    def category_mapping(self) -> Dict[str, int]:
+        return deepcopy(self._category_mapping)
+
+    @property
+    def category_id_mapping(self) -> Dict[str, int]:
+        return deepcopy(self._category_id_mapping)
+
+    @property
+    def no_entity_category(self) -> str:
+        return self._no_entity_category
+
+    @property
+    def no_entity_category_id(self) -> int:
+        return self._category_mapping[self._no_entity_category]
+
+    @property
+    def pad_token_id(self) -> int:
+        return self._encoder.config.pad_token_id
+
+    @property
+    def context_length(self) -> int:
+        return self._context_length
 
     def train(self: _ModelType, mode: bool = True) -> _ModelType:
         if self._optimized:
             raise RuntimeError(f'{self.__class__.__name__} cannot be used in training after optimization!')
-        return super(NERModel, self).train(mode)
+        return super(SpanNERModel, self).train(mode)
 
+    @torch.no_grad()
     def predict(self, texts: List[str], *, batch_size: int = 1) -> List[Set[TypedSpan]]:
+        self.eval()
         encodings = self.tokenize(texts)
-
-        # create collector for each category
-        text_token_lengths = list(map(lambda encoding: len(encoding.ids), encodings))
-        collectors = [PredictionsCollector(text_token_lengths) for _ in self._num]
 
         example_iterator = convert_all_to_examples(
             encodings, self._category_mapping, self._label_mapping,
             max_length=self._tokenizer.model_max_length
         )
 
-        for batch in batch_examples(example_iterator, batch_size=batch_size):
-            heads_logits = self(batch)
-            predictions = list(map(to_label_ids, heads_logits))
+        all_entities: List[Set[TypedSpan]] = [set() for _ in texts]
+        for batch, _ in batch_examples(example_iterator, batch_size=batch_size):
+            predicted_category_ids = self(batch)
+            _, length, _ = predicted_category_ids.shape
 
-            # iterate over batch
-            for text_id, example_start, labels, mask in zip(batch.text_ids, batch.example_starts, predictions, batch.padding_mask):
-                # iterate over categories
-                for collector, head_prediction in zip(collectors, predictions):
-                    collector.add(text_id, example_start, labels[mask])
+            entity_ids_mask = (predicted_category_ids != self._no_entity_category)
 
-        all_entities: List[Set[TypedSpan]] = [set() for _ in text_token_lengths]
-        for category_id, collector in enumerate(collectors):
-            for text_encoding, text_prediction, text_entities in zip(encodings, collector.predictions, all_entities):
-                text_entities.update(decode(text_encoding, text_prediction, self._category_id_mapping[category_id]))
+            start_padding_mask = batch.padding_mask.unsqueeze(-1)  # (BATCH, LENGTH, 1)
+            end_padding_mask = batch.padding_mask.unsqueeze(-2)  # (BATCH, 1, LENGTH)
+
+            final_mask = entity_ids_mask & self._size_limit_mask & start_padding_mask & end_padding_mask
+
+            example_starts = torch.tensor(batch.example_starts).unsqueeze(-1)
+            entity_spans = example_starts + self._spans.unsqueeze(0)  # example shift + relative shift
+
+            entity_text_ids = torch.tensor(batch.text_ids).view(batch_size, 1, 1).repeat(1, length, length)
+
+            chosen_text_ids = entity_text_ids[final_mask]
+            chosen_spans = entity_spans[final_mask]
+            chosen_category_ids = predicted_category_ids[final_mask]
+            for text_id, category_id, (start, end) in zip(chosen_text_ids, chosen_category_ids, chosen_spans):
+                all_entities[text_id].add(TypedSpan(start, end, self._category_id_mapping[category_id]))
 
         return all_entities
 
@@ -178,12 +165,32 @@ class NERModel(Module):
         batch_encoding = self._tokenizer(texts, return_offsets_mapping=True, add_special_tokens=False)
         return batch_encoding.encodings
 
-    def forward(self, examples: BatchedExamples) -> List[Tensor]:
-        # TODO: fixme does not satisfy huggingface interface
+    def forward(self, examples: BatchedExamples, labels: Optional[LongTensor] = None) -> Union[Tuple[Tensor, Tensor], Tensor]:
         encoded: BaseModelOutput = self._encoder(input_ids=examples.input_ids, attention_mask=examples.padding_mask)
-        representation = self._dropout(encoded['last_hidden_state'])
+        representation: Tensor = self._dropout(encoded['last_hidden_state'])  # (B, L, F)
 
-        return [head(representation) for head in self._heads]
+        category_scores = self._transition(representation.unsqueeze(1))  # (B, C, L, F)
+        batch_size, num_categories, sequence_length, num_features = category_scores.shape
+        logits = torch.bmm(
+            category_scores.view(-1, sequence_length, num_features),
+            category_scores.transpose(-2, -1).view(-1, num_features, sequence_length)
+        ).view(batch_size, num_categories, sequence_length, sequence_length)  # convert to (B, C, L, L)
+
+        logits = logits.transpose(-3, -2).transpose(-2, -1)  # (B, L, L, C)
+
+        start_padding_mask = examples.padding_mask.view(batch_size, -1, sequence_length)
+        end_padding_mask = examples.padding_mask.view(batch_size, sequence_length, -1)
+        predictions_mask = self._size_limit_mask[:sequence_length, :sequence_length].unsqueeze(0) & start_padding_mask & end_padding_mask
+
+        predictions = torch.argmax(logits, dim=-1)
+        predictions[~predictions_mask] = -100
+
+        if labels is not None:
+            labels_mask = self._size_limit_mask & (labels != -100)
+            loss = CrossEntropyLoss(reduction='mean')(logits[predictions_mask], labels[labels_mask])
+            return loss, predictions
+
+        return predictions
 
     def optimize(self, onnx_dir: Path, fuse: bool = True, quant: bool = True) -> None:
         if self._optimized:
@@ -273,11 +280,3 @@ class ONNXOptimizedEncoder(Module):
 
         # Run the model (None = get all the outputs)
         return self._session.run(None, {'input_ids': to_numpy(input_ids), 'attention_mask': to_numpy(padding_mask)})
-
-
-def to_numpy(tensor: Tensor) -> np.ndarray:
-    return tensor.detach().cpu().numpy()
-
-
-def to_label_ids(logits: Tensor) -> LongTensor:
-    return torch.argmax(logits.detach().cpu(), dim=-1).long()
