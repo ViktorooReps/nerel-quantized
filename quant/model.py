@@ -191,6 +191,7 @@ class SpanNERModel(SerializableModel):
         predictions[~predictions_mask] = -100
 
         if labels is not None:
+            labels = labels.to(self.device)
             labels_mask = self._size_limit_mask & (labels != -100)
             loss = CrossEntropyLoss(reduction='mean')(logits[predictions_mask], labels[labels_mask])
             return loss, predictions
