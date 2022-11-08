@@ -31,7 +31,7 @@ try:
     from onnxruntime_tools import optimizer
     from onnxruntime_tools.transformers.onnx_model_bert import BertOptimizationOptions
 except:
-    raise logger.warning('Could not import ONNX inference tools!')
+    logger.warning('Could not import ONNX inference tools!')
 
 _ModelType = TypeVar('_ModelType', bound=Module)
 
