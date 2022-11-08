@@ -70,7 +70,7 @@ class ModelArguments:
 
 class SpanNERModel(SerializableModel):
 
-    def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 100):
+    def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 1000):
         super().__init__()
 
         self._no_entity_category = 'NO_ENTITY'
