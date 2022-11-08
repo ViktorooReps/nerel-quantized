@@ -24,12 +24,14 @@ from quant.utils import invert, to_numpy
 environ["OMP_NUM_THREADS"] = str(cpu_count())
 environ["OMP_WAIT_POLICY"] = 'ACTIVE'
 
+logger = logging.getLogger(__name__)
+
 try:
     from onnxruntime import InferenceSession, SessionOptions, GraphOptimizationLevel
     from onnxruntime_tools import optimizer
     from onnxruntime_tools.transformers.onnx_model_bert import BertOptimizationOptions
-except ImportError:
-    raise ImportError('Could not import ONNX inference tools!')
+except:
+    raise logger.warning('Could not import ONNX inference tools!')
 
 _ModelType = TypeVar('_ModelType', bound=Module)
 
