@@ -70,7 +70,7 @@ class ModelArguments:
 
 class SpanNERModel(SerializableModel):
 
-    def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 1000):
+    def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 20):
         super().__init__()
 
         self._no_entity_category = 'NO_ENTITY'
@@ -202,10 +202,12 @@ class SpanNERModel(SerializableModel):
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
-            non_entity_mask = (labels != self._no_entity_id)
+            entity_mask = (labels != self._no_entity_id) & labels_mask
+            non_entity_mask = (labels == self._no_entity_id) & labels_mask
 
-            loss = CrossEntropyLoss(reduction='mean')(logits[non_entity_mask], labels[non_entity_mask])
-            return loss, predictions
+            positive_loss = CrossEntropyLoss(reduction='mean')(logits[entity_mask], labels[entity_mask])
+            negative_loss = CrossEntropyLoss(reduction='mean')(logits[non_entity_mask], labels[non_entity_mask])
+            return positive_loss + negative_loss, predictions
 
         return predictions
 
