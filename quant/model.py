@@ -202,7 +202,7 @@ class SpanNERModel(SerializableModel):
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
-            loss = CrossEntropyLoss(reduction='sum')(logits[predictions_mask], labels[labels_mask]) / batch_size
+            loss = CrossEntropyLoss(reduction='mean')(logits[predictions_mask], labels[labels_mask])
             return loss, predictions
 
         return predictions
