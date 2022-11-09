@@ -191,9 +191,9 @@ class SpanNERModel(SerializableModel):
         )  # (B, L, L, C)
 
         category_scores = pad_images(
-            category_scores.view(-1, sequence_length, sequence_length),
+            category_scores.transpose(-1, -2).transpose(-2, -3).view(-1, sequence_length, sequence_length),
             padding_length=self._context_length
-        ).view(batch_size, self._n_categories, self._context_length, self._context_length)
+        ).view(batch_size, self._n_categories, self._context_length, self._context_length).transpose(-3, -2).transpose(-2, -1)
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
         end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
