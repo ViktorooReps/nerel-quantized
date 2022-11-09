@@ -92,7 +92,7 @@ def batch_examples(examples: Iterable[Example], *, batch_size: int = 1) -> Itera
         curr_batch.append(example)
 
     if len(curr_batch):
-        yield collate_examples(examples)
+        yield collate_examples(curr_batch)
 
 
 def convert_to_examples(
