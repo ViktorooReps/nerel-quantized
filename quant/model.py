@@ -202,7 +202,9 @@ class SpanNERModel(SerializableModel):
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
-            loss = CrossEntropyLoss(reduction='mean')(logits[predictions_mask], labels[labels_mask])
+            non_entity_mask = (labels != self._no_entity_id)
+
+            loss = CrossEntropyLoss(reduction='mean')(logits[non_entity_mask], labels[non_entity_mask])
             return loss, predictions
 
         return predictions
