@@ -2,6 +2,7 @@ import logging
 import pickle
 from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import partial
 from os import environ, cpu_count
 from pathlib import Path
 from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
@@ -11,6 +12,7 @@ from torch import LongTensor, BoolTensor, Tensor
 from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear
 from torch.nn.functional import pad
 from torch.onnx import export
+from torch.utils.data import DataLoader
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
 from transformers.convert_graph_to_onnx import quantize
 from transformers.modeling_outputs import BaseModelOutput
@@ -18,7 +20,8 @@ from transformers.models.lxmert.modeling_lxmert import GeLU
 from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.tokenization_utils_base import EncodingFast
 
-from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples
+from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples, read_nerel, DatasetType, collate_examples
+from quant.pruner import mask_heads, prune_heads
 from quant.utils import invert, to_numpy, pad_images
 
 torch.set_num_threads(cpu_count())
@@ -194,12 +197,25 @@ class SpanNERModel(SerializableModel):
         batch_encoding = self._tokenizer(texts, return_offsets_mapping=True, add_special_tokens=False)
         return batch_encoding.encodings
 
-    def forward(self, examples: BatchedExamples, labels: Optional[LongTensor] = None) -> Union[Tuple[Tensor, Tensor], Tensor]:
+    def forward(
+            self,
+            examples: BatchedExamples,
+            labels: Optional[LongTensor] = None,
+            encoder_head_mask: BoolTensor = None,
+            return_attention_scores: bool = False
+    ) -> Union[Tuple[Tensor, ...], Tensor]:
+
+        if return_attention_scores and self._optimized:
+            raise NotImplementedError
+
         encoded: BaseModelOutput = self._encoder(
             input_ids=examples.input_ids.to(self.device),
-            attention_mask=examples.padding_mask.to(self.device)
+            attention_mask=examples.padding_mask.to(self.device),
+            head_mask=encoder_head_mask
         )
         representation: Tensor = encoded['last_hidden_state']  # (B, L, F)
+        attention_scores: Optional[Tensor] = encoded['attentions'] if return_attention_scores else None
+
         batch_size, sequence_length, num_features = representation.shape
 
         representation = pad(representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
@@ -231,9 +247,30 @@ class SpanNERModel(SerializableModel):
 
             recall_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_labels_mask], labels[entity_labels_mask])
             precision_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_predictions_mask], labels[entity_predictions_mask])
-            return recall_loss + precision_loss, predictions
+            return (recall_loss + precision_loss, predictions) + (attention_scores,) if return_attention_scores else tuple()
 
+        if return_attention_scores:
+            return predictions, attention_scores
         return predictions
+
+    def prune(self, dataset_dir: Path, prune_fraction: float = 0.1, prune_iter: int = 5):
+        if self._optimized:
+            raise RuntimeError(f'{self.__class__.__name__} has already been optimized!')
+        self.eval()
+
+        from train import NERDataset
+
+        dev_dataset = NERDataset(read_nerel(
+            dataset_dir, DatasetType.DEV, self.tokenize, self._category_mapping, self._no_entity_category
+        ))
+        dataloader = DataLoader(
+            dev_dataset,
+            shuffle=False,
+            batch_size=1,
+            collate_fn=partial(collate_examples, pad_length=self._context_length)
+        )
+        head_mask = mask_heads(self, dataloader, prune_fraction=prune_fraction, num_iter=prune_iter)
+        prune_heads(self, head_mask)
 
     def optimize(self, onnx_dir: Path, fuse: bool = True, quant: bool = True) -> None:
         if self._optimized:
