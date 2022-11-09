@@ -132,5 +132,4 @@ def prune_heads(model, head_mask: BoolTensor):
         (layer, (1 - head_mask[layer].long()).nonzero().squeeze().tolist()) for layer in range(len(head_mask))
     )
 
-    assert sum(len(h) for h in heads_to_prune.values()) == (1 - head_mask.long()).sum().item()
     model._encoder.prune_heads(heads_to_prune)
