@@ -42,6 +42,9 @@ def compute_metrics(
     label_ids = evaluation_results.label_ids[mask]
     predictions = evaluation_results.predictions[mask]
 
+    print()
+    print()
+    print()
     print(((label_ids == predictions) & (label_ids != no_entity_category_id)).sum())
 
     labels = sorted(category_id_mapping.keys())
