@@ -183,8 +183,8 @@ class SpanNERModel(SerializableModel):
 
         logits = logits.transpose(-3, -2).transpose(-2, -1)  # (B, L, L, C)
 
-        start_padding_mask = examples.padding_mask.view(batch_size, -1, sequence_length).to(self.device)
-        end_padding_mask = examples.padding_mask.view(batch_size, sequence_length, -1).to(self.device)
+        start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
+        end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
         size_limit_mask = self._size_limit_mask.to(self.device)
 
         predictions_mask = size_limit_mask[:sequence_length, :sequence_length].unsqueeze(0) & start_padding_mask & end_padding_mask
@@ -195,6 +195,7 @@ class SpanNERModel(SerializableModel):
         if labels is not None:
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
+
             loss = CrossEntropyLoss(reduction='mean')(logits[predictions_mask], labels[labels_mask])
             return loss, predictions
 
