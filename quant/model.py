@@ -8,7 +8,7 @@ from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
 import torch
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d, LayerNorm, Linear, Bilinear
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear
 from torch.nn.functional import pad
 from torch.onnx import export
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
@@ -132,7 +132,7 @@ class SpanNERModel(SerializableModel):
         return self._context_length
 
     def train(self: _ModelType, mode: bool = True) -> _ModelType:
-        if self._optimized:
+        if self._optimized and mode:
             raise RuntimeError(f'{self.__class__.__name__} cannot be used in training after optimization!')
         return super(SpanNERModel, self).train(mode)
 
@@ -152,7 +152,7 @@ class SpanNERModel(SerializableModel):
         for batch in batch_examples(example_iterator, batch_size=batch_size):
             examples: BatchedExamples = batch['examples']
             predicted_category_ids: LongTensor = self(examples).cpu()
-            _, length, _ = predicted_category_ids.shape
+            _, length = examples.padding_mask.shape
 
             entity_ids_mask = (predicted_category_ids != self._no_entity_id)
 
@@ -160,18 +160,27 @@ class SpanNERModel(SerializableModel):
             end_padding_mask = examples.padding_mask.unsqueeze(-2)  # (BATCH, 1, LENGTH)
             padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
 
-            final_mask = entity_ids_mask.cpu() & self._size_limit_mask[:length, :length] & padding_image
+            final_mask = entity_ids_mask.cpu() & self._size_limit_mask & padding_image
 
-            example_starts = torch.tensor(examples.example_starts).unsqueeze(-1)
-            entity_spans = example_starts + self._spans.unsqueeze(0)  # example shift + relative shift
+            entity_text_ids = torch.tensor(examples.text_ids).view(batch_size, 1, 1).repeat(1, self._context_length, self._context_length)
 
-            entity_text_ids = torch.tensor(examples.text_ids).view(batch_size, 1, 1).repeat(1, length, length)
+            chosen_spans = torch.cat([
+                pad(
+                    examples.start_offset,
+                    [0, self._context_length - length],
+                    value=-100
+                ).view(batch_size, self._context_length, 1, 1).repeat(1, 1, self._context_length, 1),
+                pad(
+                    examples.end_offset,
+                    [0, self._context_length - length],
+                    value=-100
+                ).view(batch_size, self._context_length, 1, 1).transpose(-3, -2).repeat(1, self._context_length, 1, 1)
+            ], dim=-1)[final_mask]
 
             chosen_text_ids = entity_text_ids[final_mask]
-            chosen_spans = entity_spans[final_mask]
             chosen_category_ids = predicted_category_ids[final_mask]
             for text_id, category_id, (start, end) in zip(chosen_text_ids, chosen_category_ids, chosen_spans):
-                all_entities[text_id].add(TypedSpan(start, end, self._category_id_mapping[category_id.item()]))
+                all_entities[text_id].add(TypedSpan(start.item(), end.item(), self._category_id_mapping[category_id.item()]))
 
         return all_entities
 
@@ -244,8 +253,6 @@ class SpanNERModel(SerializableModel):
             output_names=('last_hidden_state',),
             dynamic_axes={'input_ids': dynamic_axes, 'attention_mask': dynamic_axes, 'last_hidden_state': dynamic_axes},
             do_constant_folding=True,
-            use_external_data_format=onnx_config.use_external_data_format(self._encoder.num_parameters()),
-            enable_onnx_checker=True,
             opset_version=11,
         )
 
@@ -298,13 +305,21 @@ class ONNXOptimizedEncoder(Module):
         options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
 
         # Load the model as a graph and prepare the CPU backend
-        self._session = InferenceSession(self._onnx_path, options, providers=['CPUExecutionProvider'])
+        self._session = InferenceSession(self._onnx_path.as_posix(), options, providers=['CPUExecutionProvider'])
         self._session.disable_fallback()
 
-    def forward(self, input_ids: LongTensor, padding_mask: BoolTensor) -> Tensor:
+    def forward(self, input_ids: LongTensor, attention_mask: BoolTensor) -> Dict[str, Tensor]:
         if self._session is None:
             logger.info(f'Starting inference session for {self._onnx_path}.')
             self._start_session()
 
         # Run the model (None = get all the outputs)
-        return self._session.run(None, {'input_ids': to_numpy(input_ids), 'attention_mask': to_numpy(padding_mask)})
+        return {
+            'last_hidden_state': torch.tensor(self._session.run(
+                None,
+                {
+                    'input_ids': to_numpy(input_ids),
+                    'attention_mask': to_numpy(attention_mask.long())
+                }
+            )[0])
+        }

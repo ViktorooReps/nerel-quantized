@@ -27,6 +27,8 @@ class Example:
     text_id: int
     example_start: int
     input_ids: LongTensor  # shape: (LENGTH)
+    start_offset: LongTensor
+    end_offset: LongTensor
     target_label_ids: Optional[LongTensor]  # shape: (LENGTH, LENGTH)
 
 
@@ -35,6 +37,8 @@ class BatchedExamples:
     text_ids: Tuple[int, ...]
     example_starts: Tuple[int, ...]
     input_ids: LongTensor  # shape: (BATCH_SIZE, LENGTH)
+    start_offset: LongTensor
+    end_offset: LongTensor
     padding_mask: BoolTensor  # shape: (BATCH_SIZE, LENGTH)
 
 
@@ -49,6 +53,8 @@ def collate_examples(
     all_example_starts: List[int] = []
     all_input_ids: List[LongTensor] = []
     all_padding_masks: List[BoolTensor] = []
+    all_start_offsets: List[LongTensor] = []
+    all_end_offsets: List[LongTensor] = []
     target_label_ids: Optional[List[LongTensor]] = None
 
     no_target_label_ids: Optional[bool] = None
@@ -57,6 +63,8 @@ def collate_examples(
         all_text_ids.append(example.text_id)
         all_example_starts.append(example.example_start)
         all_input_ids.append(example.input_ids)
+        all_start_offsets.append(example.start_offset)
+        all_end_offsets.append(example.end_offset)
         all_padding_masks.append(torch.ones_like(example.input_ids, dtype=torch.bool).bool())
 
         if no_target_label_ids is None:
@@ -75,6 +83,8 @@ def collate_examples(
             tuple(all_text_ids),
             tuple(all_example_starts),
             pad_sequence(all_input_ids, batch_first=True, padding_value=padding_id).long(),
+            pad_sequence(all_start_offsets, batch_first=True, padding_value=-100).long(),
+            pad_sequence(all_end_offsets, batch_first=True, padding_value=-100).long(),
             pad_sequence(all_padding_masks, batch_first=True, padding_value=False).bool()
         ),
         'labels': pad_images(target_label_ids, padding_value=-100, padding_length=pad_length) if not no_target_label_ids else None
@@ -107,6 +117,7 @@ def convert_to_examples(
     """Encodes entities and splits encoded text into chunks."""
 
     sequence_length = len(encoding.ids)
+    offset = torch.tensor(encoding.offsets, dtype=torch.long)
 
     target_label_ids: Optional[LongTensor] = None
     if entities is not None:
@@ -144,6 +155,8 @@ def convert_to_examples(
             text_id,
             chunk_start,
             torch.tensor(encoding.ids[chunk_start:chunk_end], dtype=torch.long).long(),
+            offset[chunk_start:chunk_end, 0],
+            offset[chunk_start:chunk_end, 1],
             target_label_ids[chunk_start:chunk_end, chunk_start:chunk_end] if target_label_ids is not None else None
         )
         yield ex
@@ -193,16 +206,7 @@ def read_text(text_file: Path) -> str:
         return f.read()
 
 
-def collect_categories(dataset_dir: Path) -> Set[str]:
-    dataset_dir = dataset_dir.joinpath(DatasetType.TRAIN.value)
-
-    if not dataset_dir.exists():
-        raise RuntimeError(f'Dataset directory {dataset_dir} does not exist!')
-
-    if not dataset_dir.is_dir():
-        raise RuntimeError(f'Provided path {dataset_dir} is not a directory!')
-
-    annotation_files = dataset_dir.glob('*.ann')
+def collect_categories(annotation_files: Iterable[Path]) -> Set[str]:
     all_annotations = list(map(read_annotation, annotation_files))
 
     all_categories: Set[str] = set()

@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from transformers import Trainer, HfArgumentParser, TrainingArguments, EvalPrediction
 from transformers.modeling_utils import unwrap_model
 
-from quant.datamodel import read_nerel, DatasetType, Example, collate_examples, collect_categories
+from quant.datamodel import read_nerel, DatasetType, Example, collate_examples, collect_categories, get_dataset_files
 from quant.model import ModelArguments, SpanNERModel
 
 
@@ -106,7 +106,8 @@ if __name__ == '__main__':
     dataset_args: DatasetArguments
     model_args: ModelArguments
 
-    categories = collect_categories(dataset_args.dataset_dir)
+    _, annotation_files = get_dataset_files(dataset_args.dataset_dir, DatasetType.TRAIN)
+    categories = collect_categories(annotation_files)
     model = SpanNERModel(model_args, categories)
 
     train_dataset = NERDataset(read_nerel(

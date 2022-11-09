@@ -4,8 +4,9 @@ from typing import List, Iterable, Set, Tuple, Dict
 
 import numpy as np
 
-from quant.datamodel import TypedSpan, get_dataset_files, DatasetType, read_annotation, read_text
+from quant.datamodel import TypedSpan, get_dataset_files, DatasetType, read_annotation, read_text, collect_categories
 from quant.model import SpanNERModel
+from quant.utils import invert
 
 
 class Solution:
@@ -25,16 +26,22 @@ class Solution:
     @classmethod
     def evaluate(cls):
         text_files, annotation_files = get_dataset_files(Path('data'), DatasetType.TEST, exclude_filenames=cls.exclude_filenames)
+        test_categories = collect_categories(annotation_files)
+
         ground_truth = list(map(read_annotation, annotation_files))
         texts = list(map(read_text, text_files))
 
         model = SpanNERModel.load(cls.model_path)
-        model_predictions = model.predict(texts)
+        model_predictions = list(model.predict(texts))
 
-        n_categories = len(model.category_mapping)
+        print(f'Computing metrics for {test_categories} ({len(test_categories)}/{len(model.category_mapping) - 1})')
+
+        n_categories = len(test_categories)
+        category_id_mapping = dict(enumerate(test_categories))
+        category_mapping = invert(category_id_mapping)
 
         def group_by_category(entities: Set[TypedSpan]) -> Dict[str, Set[Tuple[int, int]]]:
-            groups = {cat: set() for cat in model.category_mapping.keys()}
+            groups = {cat: set() for cat in test_categories}
             for entity in entities:
                 groups[entity.type].add((entity.start, entity.end))
             return groups
@@ -47,18 +54,18 @@ class Solution:
             true_groups = group_by_category(true_entities)
             predicted_groups = group_by_category(predicted_entities)
 
-            for category in model.category_mapping.keys():
-                category_id = model.category_mapping[category]
+            for category in test_categories:
+                category_id = category_mapping[category]
                 true_set = true_groups[category]
                 predicted_set = predicted_groups[category]
 
-                true_positives[category_id] += len(true_set.union(predicted_set))
+                true_positives[category_id] += len(true_set.intersection(predicted_set))
                 false_positives[category_id] += len(predicted_set.difference(true_set))
                 false_negatives[category_id] += len(true_set.difference(predicted_set))
 
         category_f1 = true_positives / (true_positives + (false_positives + false_negatives) / 2)
         for category_id, f1 in enumerate(category_f1):
-            category = model.category_id_mapping[category_id]
+            category = category_id_mapping[category_id]
             print(f'{category}: {f1 * 100:.2f}%')
 
         f1_macro = category_f1.mean()
