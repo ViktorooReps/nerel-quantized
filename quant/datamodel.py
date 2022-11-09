@@ -130,7 +130,7 @@ def convert_to_examples(
                 token_end = token_end_mapping[end + 1]
 
             if target_label_ids[token_start][token_end] != no_entity_category_id:
-                from_category = category_id_mapping[target_label_ids[token_start][token_end]]
+                from_category = category_id_mapping[target_label_ids[token_start][token_end].item()]
                 logger.warning(f'Rewriting entity of category {from_category} with {category} at ({start} {end}) span')
 
             target_label_ids[token_start][token_end] = category_mapping[category]
