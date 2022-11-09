@@ -152,12 +152,17 @@ def convert_to_examples(
 def convert_all_to_examples(
         encodings: Iterable[EncodingFast],
         category_mapping: Dict[str, int],
-        label_mapping: Dict[str, int],
+        no_entity_category: str,
         *,
         max_length: int = 512
 ) -> Iterable[Example]:
 
-    converter = partial(convert_to_examples, category_mapping=category_mapping, label_mapping=label_mapping, max_length=max_length)
+    converter = partial(
+        convert_to_examples,
+        category_mapping=category_mapping,
+        no_entity_category=no_entity_category,
+        max_length=max_length
+    )
     # noinspection PyTypeChecker
     return chain.from_iterable(starmap(converter, enumerate(encodings)))
 

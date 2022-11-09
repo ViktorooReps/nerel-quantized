@@ -10,7 +10,7 @@ from quant.model import SpanNERModel
 
 class Solution:
 
-    model_path = Path('model.pkl')
+    model_path = Path('model2.pkl')
     exclude_filenames = {
         '165459_text', '176167_text', '178485_text', '192238_text',
         '193267_text', '193946_text', '194112_text', '2021',

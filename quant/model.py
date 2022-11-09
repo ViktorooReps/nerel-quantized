@@ -142,7 +142,7 @@ class SpanNERModel(SerializableModel):
         encodings = self.tokenize(texts)
 
         example_iterator = convert_all_to_examples(
-            encodings, self._category_mapping, self._label_mapping,
+            encodings, self._category_mapping, self.no_entity_category,
             max_length=self._tokenizer.model_max_length
         )
 
