@@ -9,6 +9,7 @@ from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 import torch
 from torch import LongTensor, BoolTensor, Tensor
 from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d, LayerNorm, Linear, Bilinear
+from torch.nn.functional import pad
 from torch.onnx import export
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
 from transformers.convert_graph_to_onnx import quantize
@@ -182,18 +183,15 @@ class SpanNERModel(SerializableModel):
         representation: Tensor = encoded['last_hidden_state']  # (B, L, F)
         batch_size, sequence_length, num_features = representation.shape
 
-        start_representation = self._dropout(self._activation(self._start_projection(representation))).unsqueeze(-2)  # (B, L, 1, R)
-        end_representation = self._dropout(self._activation(self._end_projection(representation))).unsqueeze(-3)  # (B, 1, L, R)
+        representation = pad(representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
+
+        start_representation = self._dropout(self._activation(self._start_projection(representation))).unsqueeze(-2)  # (B, M, 1, R)
+        end_representation = self._dropout(self._activation(self._end_projection(representation))).unsqueeze(-3)  # (B, 1, M, R)
 
         category_scores = self._transition(
             start_representation.repeat(1, 1, sequence_length, 1),
             end_representation.repeat(1, sequence_length, 1, 1)
-        )  # (B, L, L, C)
-
-        category_scores = pad_images(
-            category_scores.transpose(-1, -2).transpose(-2, -3).view(-1, sequence_length, sequence_length),
-            padding_length=self._context_length
-        ).view(batch_size, self._n_categories, self._context_length, self._context_length).transpose(-3, -2).transpose(-2, -1)
+        )  # (B, M, M, C)
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
         end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
