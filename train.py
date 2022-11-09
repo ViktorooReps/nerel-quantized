@@ -55,6 +55,7 @@ def compute_metrics(
     sum_precision = 0
     for category_id, (f1, recall, precision) in enumerate(zip(f1_category_scores, recall_category_scores, precision_category_scores)):
         if category_id == no_entity_category_id:
+            print(f'O: {f1}, {recall}, {precision}')
             continue
 
         category = category_id_mapping[category_id]
