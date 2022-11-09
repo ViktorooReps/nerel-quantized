@@ -78,7 +78,7 @@ class SpanNERModel(SerializableModel):
         self._no_entity_category = 'NO_ENTITY'
 
         categories.add(self._no_entity_category)
-        n_categories = len(categories)
+        self._n_categories = len(categories)
         # noinspection PyTypeChecker
         self._category_id_mapping = dict(enumerate(categories))
         self._category_mapping = invert(self._category_id_mapping)
@@ -94,7 +94,7 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
-        self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, n_categories)
+        self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
 
         positions = torch.arange(self._context_length)
         start_positions = positions.unsqueeze(-1).repeat(1, self._context_length)
@@ -190,12 +190,17 @@ class SpanNERModel(SerializableModel):
             end_representation.repeat(1, sequence_length, 1, 1)
         )  # (B, L, L, C)
 
+        category_scores = pad_images(
+            category_scores.view(-1, sequence_length, sequence_length),
+            padding_length=self._context_length
+        ).view(batch_size, self._n_categories, self._context_length, self._context_length)
+
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
         end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
-        # padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
+        padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
 
         size_limit_mask = self._size_limit_mask.to(self.device)
-        predictions_mask = size_limit_mask[:sequence_length, :sequence_length] & start_padding_mask & end_padding_mask
+        predictions_mask = size_limit_mask & padding_image
 
         predictions = torch.argmax(category_scores, dim=-1)
         predictions[~predictions_mask] = -100
@@ -204,8 +209,20 @@ class SpanNERModel(SerializableModel):
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
-            loss = CrossEntropyLoss(reduction='mean')(category_scores[predictions_mask], labels[labels_mask])
-            return loss, predictions
+            entity_labels_mask = labels_mask & (labels != self._no_entity_id)
+            entity_predictions_mask = predictions_mask & (predictions != self._no_entity_id)
+
+            recall_loss = CrossEntropyLoss(reduction='mean')(
+                category_scores[entity_labels_mask],
+                labels[entity_labels_mask]
+            )
+            precision_loss = CrossEntropyLoss(reduction='mean')(
+                category_scores[entity_predictions_mask],
+                labels[entity_predictions_mask]
+            )
+
+            print(f'recall loss: {recall_loss}, predcision loss: {precision_loss}')
+            return recall_loss + precision_loss, predictions
 
         return predictions
 
