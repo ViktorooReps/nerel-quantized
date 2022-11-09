@@ -189,8 +189,8 @@ class SpanNERModel(SerializableModel):
         end_representation = self._dropout(self._activation(self._end_projection(representation))).unsqueeze(-3)  # (B, 1, M, R)
 
         category_scores = self._transition(
-            start_representation.repeat(1, 1, sequence_length, 1),
-            end_representation.repeat(1, sequence_length, 1, 1)
+            start_representation.repeat(1, 1, self._context_length, 1),
+            end_representation.repeat(1, self._context_length, 1, 1)
         )  # (B, M, M, C)
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
