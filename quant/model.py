@@ -207,7 +207,13 @@ class SpanNERModel(SerializableModel):
 
             positive_loss = CrossEntropyLoss(reduction='mean')(logits[label_entity_mask], labels[label_entity_mask])
             negative_loss = CrossEntropyLoss(reduction='mean')(logits[predictions_entity_mask], labels[predictions_entity_mask])
-            return 5 * positive_loss + negative_loss, predictions
+
+            print(f'pos: {positive_loss}, neg: {negative_loss}')
+
+            total_loss = (positive_loss + negative_loss).item()
+            positive_coeff = (total_loss / positive_loss).item() / 2
+            negative_coeff = (total_loss / negative_loss).item() / 2
+            return positive_coeff * positive_loss + negative_coeff * negative_loss, predictions
 
         return predictions
 
