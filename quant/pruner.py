@@ -112,7 +112,7 @@ def mask_heads(model, eval_dataloader: DataLoader, prune_fraction: float = 0.1, 
         current_heads_to_mask = current_heads_to_mask[:num_to_mask]
         logger.info("Heads to mask: %s", str(current_heads_to_mask.tolist()))
         new_head_mask = new_head_mask.view(-1)
-        new_head_mask[current_heads_to_mask] = 0.0
+        new_head_mask.data[current_heads_to_mask] = 0.0
         new_head_mask = new_head_mask.view_as(head_mask)
         new_head_mask = new_head_mask.clone().detach()
 
