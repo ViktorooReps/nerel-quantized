@@ -42,10 +42,7 @@ def compute_metrics(
     label_ids = evaluation_results.label_ids[mask]
     predictions = evaluation_results.predictions[mask]
 
-    print()
-    print()
-    print()
-    print(((label_ids == predictions) & (label_ids != no_entity_category_id)).sum())
+    print(f'num matches:{((label_ids == predictions) & (label_ids != no_entity_category_id)).sum()}')
 
     labels = sorted(category_id_mapping.keys())
     f1_category_scores = f1_score(label_ids, predictions, average=None, labels=labels)
