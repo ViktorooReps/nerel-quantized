@@ -136,8 +136,15 @@ def convert_to_examples(
             try:
                 token_start = token_start_mapping[start]
             except KeyError:
-                logger.warning(f'changing {start} to {start + 1}')
-                token_start = token_start_mapping[start + 1]
+                if start + 1 in token_start_mapping:
+                    logger.warning(f'changing {start} to {start + 1}')
+                    token_start = token_start_mapping[start + 1]
+                elif start - 1 in token_start_mapping:
+                    logger.warning(f'changing {start} to {start - 1}')
+                    token_start = token_start_mapping[start - 1]
+                else:
+                    logger.warning(f'Skipped entity {category} at ({start} {end})')
+                    continue
 
             try:
                 token_end = token_end_mapping[end]
