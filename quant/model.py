@@ -192,10 +192,10 @@ class SpanNERModel(SerializableModel):
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
         end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
-        padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
+        # padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
 
         size_limit_mask = self._size_limit_mask.to(self.device)
-        predictions_mask = size_limit_mask & padding_image
+        predictions_mask = size_limit_mask[:sequence_length, :sequence_length] & start_padding_mask & end_padding_mask
 
         predictions = torch.argmax(category_scores, dim=-1)
         predictions[~predictions_mask] = -100
@@ -204,18 +204,8 @@ class SpanNERModel(SerializableModel):
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
-            label_entity_mask = (labels != self._no_entity_id) & labels_mask
-            predictions_entity_mask = (predictions != self._no_entity_id) & labels_mask
-
-            positive_loss = CrossEntropyLoss(reduction='mean')(category_scores[label_entity_mask], labels[label_entity_mask])
-            negative_loss = CrossEntropyLoss(reduction='mean')(category_scores[predictions_entity_mask], labels[predictions_entity_mask])
-
-            print(f'pos: {positive_loss}, neg: {negative_loss}')
-
-            total_loss = (positive_loss + negative_loss).item()
-            positive_coeff = (total_loss / positive_loss).item() / 2
-            negative_coeff = (total_loss / negative_loss).item() / 2
-            return positive_coeff * positive_loss + negative_coeff * negative_loss, predictions
+            loss = CrossEntropyLoss(reduction='mean')(category_scores[predictions_mask], labels[labels_mask])
+            return loss, predictions
 
         return predictions
 
