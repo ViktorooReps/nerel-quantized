@@ -8,11 +8,12 @@ from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
 import torch
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d, LayerNorm
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d, LayerNorm, Linear, Bilinear
 from torch.onnx import export
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
 from transformers.convert_graph_to_onnx import quantize
 from transformers.modeling_outputs import BaseModelOutput
+from transformers.models.lxmert.modeling_lxmert import GeLU
 from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.tokenization_utils_base import EncodingFast
 
@@ -66,6 +67,7 @@ class ModelArguments:
     bert_model: str = field(metadata={'help': 'Name of the BERT HuggingFace model to use.'})
     save_path: Path = field(metadata={'help': 'Trained model save path.'})
     dropout: float = field(default=0.5, metadata={'help': 'Dropout for BERT representations.'})
+    reduced_dim: int = field(default=128, metadata={'help': 'Reduced token representation.'})
 
 
 class SpanNERModel(SerializableModel):
@@ -85,10 +87,14 @@ class SpanNERModel(SerializableModel):
         self._tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_args.bert_model)
         self._encoder: PreTrainedModel = AutoModel.from_pretrained(model_args.bert_model)
         self._context_length = self._encoder.config.max_position_embeddings
+        n_features = self._encoder.config.hidden_size
 
         self._dropout = Dropout(model_args.dropout)
-        self._norm = LayerNorm(normalized_shape=[self._context_length, self._context_length])
-        self._transition = Conv2d(in_channels=1, out_channels=n_categories, kernel_size=(3, 1), padding=(1, 0))
+        self._start_projection = Linear(n_features, model_args.reduced_dim)
+        self._end_projection = Linear(n_features, model_args.reduced_dim)
+        self._activation = GeLU()
+
+        self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, n_categories)
 
         positions = torch.arange(self._context_length)
         start_positions = positions.unsqueeze(-1).repeat(1, self._context_length)
@@ -173,20 +179,16 @@ class SpanNERModel(SerializableModel):
             input_ids=examples.input_ids.to(self.device),
             attention_mask=examples.padding_mask.to(self.device)
         )
-        representation: Tensor = self._dropout(encoded['last_hidden_state'])  # (B, L, F)
+        representation: Tensor = encoded['last_hidden_state']  # (B, L, F)
+        batch_size, sequence_length, num_features = representation.shape
 
-        category_scores = self._transition(representation.unsqueeze(1))  # (B, C, L, F)
-        batch_size, num_categories, sequence_length, num_features = category_scores.shape
-        logits = torch.bmm(
-            category_scores.view(-1, sequence_length, num_features),
-            category_scores.transpose(-2, -1).view(-1, num_features, sequence_length)
-        ).view(batch_size, num_categories, sequence_length, sequence_length)  # convert to (B, C, L, L)
+        start_representation = self._dropout(self._activation(self._start_projection(representation))).unsqueeze(-2)  # (B, L, 1, R)
+        end_representation = self._dropout(self._activation(self._end_projection(representation))).unsqueeze(-3)  # (B, 1, L, R)
 
-        logits = self._norm(
-            pad_images(logits.view(-1, sequence_length, sequence_length), padding_length=self._context_length)
-        ).view(batch_size, num_categories, self._context_length, self._context_length)
-
-        logits = logits.transpose(-3, -2).transpose(-2, -1)  # (B, L, L, C)
+        category_scores = self._transition(
+            start_representation.repeat(1, 1, sequence_length, 1),
+            end_representation.repeat(1, sequence_length, 1, 1)
+        )  # (B, L, L, C)
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
         end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
@@ -195,7 +197,7 @@ class SpanNERModel(SerializableModel):
         size_limit_mask = self._size_limit_mask.to(self.device)
         predictions_mask = size_limit_mask & padding_image
 
-        predictions = torch.argmax(logits, dim=-1)
+        predictions = torch.argmax(category_scores, dim=-1)
         predictions[~predictions_mask] = -100
 
         if labels is not None:
@@ -205,8 +207,8 @@ class SpanNERModel(SerializableModel):
             label_entity_mask = (labels != self._no_entity_id) & labels_mask
             predictions_entity_mask = (predictions != self._no_entity_id) & labels_mask
 
-            positive_loss = CrossEntropyLoss(reduction='mean')(logits[label_entity_mask], labels[label_entity_mask])
-            negative_loss = CrossEntropyLoss(reduction='mean')(logits[predictions_entity_mask], labels[predictions_entity_mask])
+            positive_loss = CrossEntropyLoss(reduction='mean')(category_scores[label_entity_mask], labels[label_entity_mask])
+            negative_loss = CrossEntropyLoss(reduction='mean')(category_scores[predictions_entity_mask], labels[predictions_entity_mask])
 
             print(f'pos: {positive_loss}, neg: {negative_loss}')
 
