@@ -55,9 +55,9 @@ def compute_metrics(
     unique_label_ids = set(unique_label_ids)
 
     labels = sorted(category_id_mapping.keys())
-    f1_category_scores = f1_score(label_ids, predictions, average=None, labels=labels)
-    recall_category_scores = recall_score(label_ids, predictions, average=None, labels=labels)
-    precision_category_scores = precision_score(label_ids, predictions, average=None, labels=labels)
+    f1_category_scores = f1_score(label_ids, predictions, average=None, labels=labels, zero_division=0)
+    recall_category_scores = recall_score(label_ids, predictions, average=None, labels=labels, zero_division=0)
+    precision_category_scores = precision_score(label_ids, predictions, average=None, labels=labels, zero_division=0)
 
     results: Dict[str, float] = {}
     sum_f1 = 0
@@ -97,6 +97,8 @@ def pad_predictions(predictions: Tensor, _: LongTensor, *, padding_length: int) 
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+
     parser = HfArgumentParser(dataclass_types=[ModelArguments, DatasetArguments, TrainingArguments])
     model_args, dataset_args, training_args = parser.parse_args_into_dataclasses()
 
