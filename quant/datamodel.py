@@ -182,6 +182,11 @@ def read_annotation(annotation_file: Path) -> Set[TypedSpan]:
     return collected_annotations
 
 
+def read_text(text_file: Path) -> str:
+    with open(text_file) as f:
+        return f.read()
+
+
 def collect_categories(dataset_dir: Path) -> Set[str]:
     dataset_dir = dataset_dir.joinpath(DatasetType.TRAIN.value)
 
@@ -201,15 +206,12 @@ def collect_categories(dataset_dir: Path) -> Set[str]:
     return all_categories
 
 
-def read_nerel(
+def get_dataset_files(
         dataset_dir: Path,
         dataset_type: DatasetType,
-        tokenizer: Callable[[List[str]], List[EncodingFast]],
-        category_mapping: Dict[str, int],
-        no_entity_category: str,
         *,
         exclude_filenames: Set[str] = None
-) -> Iterable[Example]:
+) -> Tuple[List[Path], List[Path]]:
 
     if exclude_filenames is None:
         exclude_filenames = set()
@@ -225,12 +227,20 @@ def read_nerel(
     def is_not_excluded(file: Path) -> bool:
         return file.with_suffix('').name not in exclude_filenames
 
-    annotation_files = sorted(filter(is_not_excluded, dataset_dir.glob('*.ann')))
-    text_files = sorted(filter(is_not_excluded, dataset_dir.glob('*.txt')))
+    return sorted(filter(is_not_excluded, dataset_dir.glob('*.txt'))), sorted(filter(is_not_excluded, dataset_dir.glob('*.ann')))
 
-    def read_text(text_file: Path) -> str:
-        with open(text_file) as f:
-            return f.read()
+
+def read_nerel(
+        dataset_dir: Path,
+        dataset_type: DatasetType,
+        tokenizer: Callable[[List[str]], List[EncodingFast]],
+        category_mapping: Dict[str, int],
+        no_entity_category: str,
+        *,
+        exclude_filenames: Set[str] = None
+) -> Iterable[Example]:
+
+    text_files, annotation_files = get_dataset_files(dataset_dir, dataset_type, exclude_filenames=exclude_filenames)
 
     all_annotations = list(map(read_annotation, annotation_files))
     all_texts = list(map(read_text, text_files))

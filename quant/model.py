@@ -112,7 +112,7 @@ class SpanNERModel(SerializableModel):
         return deepcopy(self._category_mapping)
 
     @property
-    def category_id_mapping(self) -> Dict[str, int]:
+    def category_id_mapping(self) -> Dict[int, str]:
         return deepcopy(self._category_id_mapping)
 
     @property
