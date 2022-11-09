@@ -149,8 +149,15 @@ def convert_to_examples(
             try:
                 token_end = token_end_mapping[end]
             except KeyError:  # for some reason some ends are shifted by one
-                logger.warning(f'changing {end} to {end + 1}')
-                token_end = token_end_mapping[end + 1]
+                if end + 1 in token_end_mapping:
+                    logger.warning(f'changing {end} to {end + 1}')
+                    token_end = token_end_mapping[end + 1]
+                elif end - 1 in token_end_mapping:
+                    logger.warning(f'changing {end} to {end - 1}')
+                    token_end = token_end_mapping[end - 1]
+                else:
+                    logger.warning(f'Skipped entity {category} at ({start} {end})')
+                    continue
 
             if target_label_ids[token_start][token_end] != no_entity_category_id:
                 from_category = category_id_mapping[target_label_ids[token_start][token_end].item()]
