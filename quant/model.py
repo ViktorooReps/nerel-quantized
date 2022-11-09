@@ -149,10 +149,10 @@ class SpanNERModel(SerializableModel):
         all_entities: List[Set[TypedSpan]] = [set() for _ in texts]
         for batch in batch_examples(example_iterator, batch_size=batch_size):
             examples: BatchedExamples = batch['examples']
-            predicted_category_ids = self(examples)
+            predicted_category_ids: LongTensor = self(examples)
             _, length, _ = predicted_category_ids.shape
 
-            entity_ids_mask = (predicted_category_ids != self._no_entity_category)
+            entity_ids_mask = (predicted_category_ids != self._no_entity_id)
 
             start_padding_mask = examples.padding_mask.unsqueeze(-1)  # (BATCH, LENGTH, 1)
             end_padding_mask = examples.padding_mask.unsqueeze(-2)  # (BATCH, 1, LENGTH)
