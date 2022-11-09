@@ -147,21 +147,22 @@ class SpanNERModel(SerializableModel):
         )
 
         all_entities: List[Set[TypedSpan]] = [set() for _ in texts]
-        for batch, _ in batch_examples(example_iterator, batch_size=batch_size):
-            predicted_category_ids = self(batch)
+        for batch in batch_examples(example_iterator, batch_size=batch_size):
+            examples: BatchedExamples = batch['examples']
+            predicted_category_ids = self(examples)
             _, length, _ = predicted_category_ids.shape
 
             entity_ids_mask = (predicted_category_ids != self._no_entity_category)
 
-            start_padding_mask = batch.padding_mask.unsqueeze(-1)  # (BATCH, LENGTH, 1)
-            end_padding_mask = batch.padding_mask.unsqueeze(-2)  # (BATCH, 1, LENGTH)
+            start_padding_mask = examples.padding_mask.unsqueeze(-1)  # (BATCH, LENGTH, 1)
+            end_padding_mask = examples.padding_mask.unsqueeze(-2)  # (BATCH, 1, LENGTH)
 
             final_mask = entity_ids_mask & self._size_limit_mask & start_padding_mask & end_padding_mask
 
-            example_starts = torch.tensor(batch.example_starts).unsqueeze(-1)
+            example_starts = torch.tensor(examples.example_starts).unsqueeze(-1)
             entity_spans = example_starts + self._spans.unsqueeze(0)  # example shift + relative shift
 
-            entity_text_ids = torch.tensor(batch.text_ids).view(batch_size, 1, 1).repeat(1, length, length)
+            entity_text_ids = torch.tensor(examples.text_ids).view(batch_size, 1, 1).repeat(1, length, length)
 
             chosen_text_ids = entity_text_ids[final_mask]
             chosen_spans = entity_spans[final_mask]

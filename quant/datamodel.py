@@ -81,7 +81,7 @@ def collate_examples(
     }
 
 
-def batch_examples(examples: Iterable[Example], *, batch_size: int = 1) -> Iterable[Tuple[BatchedExamples, LongTensor]]:
+def batch_examples(examples: Iterable[Example], *, batch_size: int = 1) -> Iterable[Dict[str, Union[BatchedExamples, LongTensor]]]:
     """Groups examples into batches."""
     curr_batch = []
     for example in examples:
