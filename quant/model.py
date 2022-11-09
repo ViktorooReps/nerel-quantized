@@ -158,9 +158,7 @@ class SpanNERModel(SerializableModel):
             end_padding_mask = examples.padding_mask.unsqueeze(-2)  # (BATCH, 1, LENGTH)
             padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
 
-            print(f'{entity_ids_mask.device}, {self._size_limit_mask.device}, {start_padding_mask.device}')
-
-            final_mask = entity_ids_mask & self._size_limit_mask[:length, :length] & padding_image
+            final_mask = entity_ids_mask.cpu() & self._size_limit_mask[:length, :length] & padding_image
 
             example_starts = torch.tensor(examples.example_starts).unsqueeze(-1)
             entity_spans = example_starts + self._spans.unsqueeze(0)  # example shift + relative shift
