@@ -1,3 +1,4 @@
+import logging
 import time
 from pathlib import Path
 from typing import List, Iterable, Set, Tuple, Dict
@@ -11,7 +12,7 @@ from quant.utils import invert
 
 class Solution:
 
-    model_path = Path('model_cpu.pkl')
+    model_path = Path('onnx/main.pkl')
     exclude_filenames = {
         '165459_text', '176167_text', '178485_text', '192238_text',
         '193267_text', '193946_text', '194112_text', '2021',
@@ -75,6 +76,7 @@ class Solution:
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     start_time = time.time()
     Solution.evaluate()
     end_time = time.time()

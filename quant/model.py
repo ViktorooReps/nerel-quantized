@@ -21,6 +21,8 @@ from transformers.tokenization_utils_base import EncodingFast
 from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples
 from quant.utils import invert, to_numpy, pad_images
 
+torch.set_num_threads(cpu_count())
+
 # Constants from the performance optimization available in onnxruntime
 # It needs to be done before importing onnxruntime
 environ["OMP_NUM_THREADS"] = str(cpu_count())

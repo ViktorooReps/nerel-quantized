@@ -133,7 +133,12 @@ def convert_to_examples(
         text_length = len(encoding.ids)
         target_label_ids = torch.full((text_length, text_length), fill_value=no_entity_category_id, dtype=torch.long).long()
         for start, end, category in entities:
-            token_start = token_start_mapping[start]
+            try:
+                token_start = token_start_mapping[start]
+            except KeyError:
+                logger.warning(f'changing {start} to {start - 1}')
+                token_start = token_end_mapping[start - 1]
+
             try:
                 token_end = token_end_mapping[end]
             except KeyError:  # for some reason some ends are shifted by one
