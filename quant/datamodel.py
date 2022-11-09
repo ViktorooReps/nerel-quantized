@@ -136,8 +136,8 @@ def convert_to_examples(
             try:
                 token_start = token_start_mapping[start]
             except KeyError:
-                logger.warning(f'changing {start} to {start - 1}')
-                token_start = token_end_mapping[start - 1]
+                logger.warning(f'changing {start} to {start + 1}')
+                token_start = token_end_mapping[start + 1]
 
             try:
                 token_end = token_end_mapping[end]
