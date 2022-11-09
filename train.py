@@ -1,8 +1,10 @@
+import logging
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Iterable, Dict
 
+import numpy as np
 from sklearn.metrics import f1_score, recall_score, precision_score
 from torch import Tensor, LongTensor
 from torch.nn.functional import pad
@@ -12,6 +14,9 @@ from transformers.modeling_utils import unwrap_model
 
 from quant.datamodel import read_nerel, DatasetType, Example, collate_examples, collect_categories
 from quant.model import ModelArguments, SpanNERModel
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -42,7 +47,12 @@ def compute_metrics(
     label_ids = evaluation_results.label_ids[mask]
     predictions = evaluation_results.predictions[mask]
 
-    print(f'num matches:{((label_ids == predictions) & (label_ids != no_entity_category_id)).sum()}')
+    unique_label_ids = np.unique(label_ids[label_ids != no_entity_category_id])
+    unique_labels = sorted(map(category_id_mapping.__getitem__, unique_label_ids))
+
+    logger.info(f'Computing metrics for {unique_labels} ({len(unique_labels)}/{len(category_id_mapping) - 1})')
+
+    unique_label_ids = set(unique_label_ids)
 
     labels = sorted(category_id_mapping.keys())
     f1_category_scores = f1_score(label_ids, predictions, average=None, labels=labels)
@@ -55,8 +65,11 @@ def compute_metrics(
     sum_precision = 0
     for category_id, (f1, recall, precision) in enumerate(zip(f1_category_scores, recall_category_scores, precision_category_scores)):
         if category_id == no_entity_category_id:
-            print(f'O: {f1}, {recall}, {precision}')
+            logger.info(f'O: {f1}, {recall}, {precision}')
             continue
+
+        if category_id not in unique_label_ids:
+            logger.info(f'Skipping {category_id_mapping[category_id]}: {f1}, {recall}, {precision}')
 
         category = category_id_mapping[category_id]
         results[f'F1_{category}'] = f1

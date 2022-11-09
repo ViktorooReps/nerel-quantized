@@ -11,7 +11,7 @@ from torch import LongTensor, BoolTensor
 from torch.nn.utils.rnn import pad_sequence
 from transformers.tokenization_utils_base import EncodingFast
 
-from quant.utils import pad_images
+from quant.utils import pad_images, invert
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +116,11 @@ def convert_to_examples(
             token_start_mapping[token_start] = token_idx
             token_end_mapping[token_end] = token_idx
 
+        no_entity_category_id = category_mapping[no_entity_category]
+        category_id_mapping = invert(category_mapping)
+
         text_length = len(encoding.ids)
-        target_label_ids = torch.full((text_length, text_length), fill_value=category_mapping[no_entity_category], dtype=torch.long).long()
+        target_label_ids = torch.full((text_length, text_length), fill_value=no_entity_category_id, dtype=torch.long).long()
         for start, end, category in entities:
             token_start = token_start_mapping[start]
             try:
@@ -125,6 +128,11 @@ def convert_to_examples(
             except KeyError:  # for some reason some ends are shifted by one
                 logger.warning(f'changing {end} to {end + 1}')
                 token_end = token_end_mapping[end + 1]
+
+            if target_label_ids[token_start][token_end] != no_entity_category_id:
+                from_category = category_id_mapping[target_label_ids[token_start][token_end]]
+                logger.warning(f'Rewriting entity of category {from_category} with {category} at ({start} {end}) span')
+
             target_label_ids[token_start][token_end] = category_mapping[category]
 
     # split encoding into max_length-token chunks

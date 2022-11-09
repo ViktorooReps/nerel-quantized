@@ -210,16 +210,8 @@ class SpanNERModel(SerializableModel):
             entity_labels_mask = labels_mask & (labels != self._no_entity_id)
             entity_predictions_mask = predictions_mask & (predictions != self._no_entity_id)
 
-            recall_loss = CrossEntropyLoss(reduction='mean')(
-                category_scores[entity_labels_mask],
-                labels[entity_labels_mask]
-            )
-            precision_loss = CrossEntropyLoss(reduction='mean')(
-                category_scores[entity_predictions_mask],
-                labels[entity_predictions_mask]
-            )
-
-            print(f'recall loss: {recall_loss}, predcision loss: {precision_loss}')
+            recall_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_labels_mask], labels[entity_labels_mask])
+            precision_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_predictions_mask], labels[entity_predictions_mask])
             return recall_loss + precision_loss, predictions
 
         return predictions
