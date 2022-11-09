@@ -140,12 +140,13 @@ def convert_to_examples(
     chunk_start = 0
     while chunk_start < sequence_length:
         chunk_end = min(chunk_start + max_length, sequence_length)
-        yield Example(
+        ex = Example(
             text_id,
             chunk_start,
             torch.tensor(encoding.ids[chunk_start:chunk_end], dtype=torch.long).long(),
             target_label_ids[chunk_start:chunk_end, chunk_start:chunk_end] if target_label_ids is not None else None
         )
+        yield ex
         chunk_start = chunk_end
 
 

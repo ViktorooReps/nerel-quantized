@@ -142,14 +142,15 @@ class SpanNERModel(SerializableModel):
         encodings = self.tokenize(texts)
 
         example_iterator = convert_all_to_examples(
-            encodings, self._category_mapping, self.no_entity_category,
-            max_length=self._tokenizer.model_max_length
+            encodings,
+            self._category_mapping,
+            self.no_entity_category,
+            max_length=self._context_length
         )
 
         all_entities: List[Set[TypedSpan]] = [set() for _ in texts]
         for batch in batch_examples(example_iterator, batch_size=batch_size):
             examples: BatchedExamples = batch['examples']
-            print(examples.input_ids.shape, examples.padding_mask.shape)
             predicted_category_ids: LongTensor = self(examples).cpu()
             _, length, _ = predicted_category_ids.shape
 
