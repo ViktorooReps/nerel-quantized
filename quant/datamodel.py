@@ -123,6 +123,7 @@ def convert_to_examples(
             try:
                 token_end = token_end_mapping[end]
             except KeyError:  # for some reason some ends are shifted by one
+                logger.warning(f'changing {end} to {end + 1}')
                 token_end = token_end_mapping[end + 1]
             target_label_ids[token_start][token_end] = category_mapping[category]
 

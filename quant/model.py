@@ -8,7 +8,7 @@ from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
 import torch
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Conv2d, LayerNorm
 from torch.onnx import export
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
 from transformers.convert_graph_to_onnx import quantize
@@ -17,7 +17,7 @@ from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.tokenization_utils_base import EncodingFast
 
 from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples
-from quant.utils import invert, to_numpy
+from quant.utils import invert, to_numpy, pad_images
 
 # Constants from the performance optimization available in onnxruntime
 # It needs to be done before importing onnxruntime
@@ -84,14 +84,15 @@ class SpanNERModel(SerializableModel):
 
         self._tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_args.bert_model)
         self._encoder: PreTrainedModel = AutoModel.from_pretrained(model_args.bert_model)
+        self._context_length = self._encoder.config.max_position_embeddings
 
         self._dropout = Dropout(model_args.dropout)
+        self._norm = LayerNorm(normalized_shape=[self._context_length, self._context_length])
         self._transition = Conv2d(in_channels=1, out_channels=n_categories, kernel_size=(3, 1), padding=(1, 0))
 
-        self._context_length = self._encoder.config.max_position_embeddings
         positions = torch.arange(self._context_length)
-        start_positions = positions.view(self._context_length, 1).repeat(1, self._context_length)
-        end_positions = positions.view(1, self._context_length).repeat(self._context_length, 1)
+        start_positions = positions.unsqueeze(-1).repeat(1, self._context_length)
+        end_positions = positions.unsqueeze(-2).repeat(self._context_length, 1)
         self._spans = torch.cat([start_positions.unsqueeze(-1), end_positions.unsqueeze(-1)], dim=-1)  # (LENGTH, LENGTH, 2)
 
         entity_lengths = end_positions - start_positions + 1
@@ -181,13 +182,18 @@ class SpanNERModel(SerializableModel):
             category_scores.transpose(-2, -1).view(-1, num_features, sequence_length)
         ).view(batch_size, num_categories, sequence_length, sequence_length)  # convert to (B, C, L, L)
 
+        logits = self._norm(
+            pad_images(logits.view(-1, sequence_length, sequence_length), padding_length=self._context_length)
+        ).view(batch_size, num_categories, self._context_length, self._context_length)
+
         logits = logits.transpose(-3, -2).transpose(-2, -1)  # (B, L, L, C)
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
         end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
-        size_limit_mask = self._size_limit_mask.to(self.device)
+        padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
 
-        predictions_mask = size_limit_mask[:sequence_length, :sequence_length].unsqueeze(0) & start_padding_mask & end_padding_mask
+        size_limit_mask = self._size_limit_mask.to(self.device)
+        predictions_mask = size_limit_mask & padding_image
 
         predictions = torch.argmax(logits, dim=-1)
         predictions[~predictions_mask] = -100
