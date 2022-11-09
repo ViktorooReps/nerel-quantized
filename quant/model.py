@@ -71,6 +71,7 @@ class ModelArguments:
     save_path: Path = field(metadata={'help': 'Trained model save path.'})
     dropout: float = field(default=0.5, metadata={'help': 'Dropout for BERT representations.'})
     reduced_dim: int = field(default=128, metadata={'help': 'Reduced token representation.'})
+    max_context_length: int = field(default=None, metadata={'help': 'Context length (same as model by default)'})
 
 
 class SpanNERModel(SerializableModel):
@@ -89,7 +90,10 @@ class SpanNERModel(SerializableModel):
 
         self._tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_args.bert_model)
         self._encoder: PreTrainedModel = AutoModel.from_pretrained(model_args.bert_model)
+
         self._context_length = self._encoder.config.max_position_embeddings
+        if model_args.max_context_length is not None:
+            self._context_length = model_args.max_context_length
         n_features = self._encoder.config.hidden_size
 
         self._dropout = Dropout(model_args.dropout)
