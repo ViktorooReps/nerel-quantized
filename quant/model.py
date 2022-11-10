@@ -237,7 +237,7 @@ class SpanNERModel(SerializableModel):
             end_representation.repeat(1, self._context_length, 1, 1)
         )  # (B, M, M, R)
         lengths = self._entity_lengths.to(self.device).unsqueeze(0).repeat(batch_size, 1, 1)[predictions_mask]
-        category_embedding[predictions_mask] += self._length_embedding[lengths]
+        category_embedding[predictions_mask] += self._length_embedding(lengths)
         category_scores = self._classifier(self._normalization(category_embedding))
 
         predictions = torch.argmax(category_scores, dim=-1)
