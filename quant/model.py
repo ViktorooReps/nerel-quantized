@@ -1,5 +1,6 @@
 import logging
 import pickle
+import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
@@ -351,10 +352,12 @@ class ONNXOptimizedEncoder(Module):
         self._session = InferenceSession(self._onnx_path.as_posix(), options, providers=['CPUExecutionProvider'])
         self._session.disable_fallback()
 
-    def forward(self, input_ids: LongTensor, attention_mask: BoolTensor) -> Dict[str, Tensor]:
+    def forward(self, input_ids: LongTensor, attention_mask: BoolTensor, **_) -> Dict[str, Tensor]:
         if self._session is None:
             logger.info(f'Starting inference session for {self._onnx_path}.')
+            start_time = time.time()
             self._start_session()
+            logger.info(f'Inference started in {time.time() - start_time:.4f}s.')
 
         # Run the model (None = get all the outputs)
         return {

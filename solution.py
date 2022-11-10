@@ -81,4 +81,4 @@ if __name__ == '__main__':
     Solution.evaluate()
     end_time = time.time()
 
-    print(f'Test time: {end_time - start_time}s')
+    print(f'Test time: {end_time - start_time:.4f}s')
