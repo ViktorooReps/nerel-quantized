@@ -9,7 +9,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     model = SpanNERModel.load(Path('model_10epochs_cpu.pkl'))
     model.to(torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
-    model.prune(Path('data'), 0.2, batch_size=4)
+    model.prune(Path('data'), 0.2, batch_size=1)
     model.cpu()
     model.save(Path('model_10epochs_cpu_pruned.pkl'))
     print('Model pruned and saved!')
