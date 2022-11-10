@@ -5,7 +5,7 @@ import logging
 import pprint
 
 import torch
-from torch import Tensor, BoolTensor
+from torch import Tensor, BoolTensor, FloatTensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -98,12 +98,14 @@ def mask_heads(model, eval_dataloader: DataLoader, prune_fraction: float = 0.1, 
     return head_mask
 
 
-def prune_heads(model, head_mask: BoolTensor):
+def prune_heads(model, head_mask: FloatTensor):
     """This method shows how to prune head (remove heads weights) based on
     the head importance scores as described in Michel et al. (http://arxiv.org/abs/1905.10650)
     """
     heads_to_prune = dict(
         (layer, (1 - head_mask[layer].long()).nonzero().squeeze().tolist()) for layer in range(len(head_mask))
     )
+
+    logger.info(f'\nHeads to prune: \n{pprint.pformat(heads_to_prune)}')
 
     model._encoder.prune_heads(heads_to_prune)  # TODO

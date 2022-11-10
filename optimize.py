@@ -13,5 +13,6 @@ if __name__ == '__main__':
     model.cpu()
     model.save(Path('model_10epochs_cpu_pruned.pkl'))
     print('Model pruned and saved!')
+
     model.optimize(Path('onnx'), fuse=False, quant=True)
     model.save(Path('onnx/main.pkl'))
