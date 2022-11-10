@@ -14,6 +14,8 @@ class OptimizationArguments:
     device: str = field(default='cpu', metadata={'help': 'Device to use for optimization. Options: cuda, cpu.'})
 
     prune: float = field(default=0.0, metadata={'help': 'Fraction of all heads to prune.'})
+    prune_iterations: int = field(default=5, metadata={'help': 'Pruning iterations (the higher the better)'})
+    batch_size: int = field(default=1, metadata={'help': 'Batch size for head importances evaluation.'})
     dataset_dir: Path = field(default=Path('data'), metadata={'help': 'Dataset to use for pruning.'})
 
     onnx_dir: Path = field(default=Path('onnx'), metadata={'help': 'Path to directory where to store ONNX models.'})
@@ -31,7 +33,7 @@ if __name__ == '__main__':
     model.to(torch.device(opt_args.device))
 
     if opt_args.prune > 0:
-        model.prune(opt_args.dataset_dir, opt_args.prune, batch_size=1)
+        model.prune(opt_args.dataset_dir, opt_args.prune, opt_args.prune_iterations, opt_args.batch_size)
         model.cpu()
         pruned_path = Path(opt_args.model.parent.joinpath('pruned_' + opt_args.model.name))
         model.save(pruned_path)
