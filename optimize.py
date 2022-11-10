@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import torch.cuda
@@ -5,6 +6,7 @@ import torch.cuda
 from quant.model import SpanNERModel
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     model = SpanNERModel.load(Path('model_10epochs_cpu.pkl'))
     model.to(torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
     model.prune(Path('data'), 0.2)
