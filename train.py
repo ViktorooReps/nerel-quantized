@@ -135,4 +135,5 @@ if __name__ == '__main__':
 
     # noinspection PyTypeChecker
     trained_model: SpanNERModel = unwrap_model(trainer.model_wrapped)
+    trained_model.cpu()
     trained_model.save(model_args.save_path)

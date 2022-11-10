@@ -20,7 +20,9 @@ class OptimizationArguments:
 
     onnx_dir: Path = field(default=Path('onnx'), metadata={'help': 'Path to directory where to store ONNX models.'})
     fuse: bool = field(default=False, metadata={'help': 'Fuse some elements of the model (is not supported with quantization)'})
-    quantize: bool = field(default=False, metadata={'help': 'Quantize the model'})
+    quantize: bool = field(default=False, metadata={'help': 'Quantize the model.'})
+    opset_version: int = field(default=13, metadata={'help': 'ONNX opset version: 11, 12 or 13.'})
+    do_constant_folding: bool = field(default=False, metadata={'help': 'Fold constants during ONNX conversion.'})
 
 
 if __name__ == '__main__':
@@ -39,7 +41,13 @@ if __name__ == '__main__':
         model.save(pruned_path)
         logging.info(f'Model pruned and saved to {pruned_path}')
 
-    model.optimize(opt_args.onnx_dir, fuse=opt_args.fuse, quant=opt_args.quantize)
+    model.optimize(
+        opt_args.onnx_dir,
+        fuse=opt_args.fuse,
+        quant=opt_args.quantize,
+        opset_version=opt_args.opset_version,
+        do_constant_folding=opt_args.do_constant_folding
+    )
     opt_path = opt_args.onnx_dir.joinpath('main.pkl')
     model.save(opt_path)
     logging.info(f'Model optimized and saved to {opt_path}')

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
 import torch
+from onnxruntime.transformers import optimizer
+from onnxruntime.transformers.onnx_model_bert import BertOptimizationOptions
 from torch import LongTensor, BoolTensor, Tensor
 from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear
 from torch.nn.functional import pad
@@ -25,19 +27,17 @@ from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, 
 from quant.pruner import mask_heads, prune_heads
 from quant.utils import invert, to_numpy, pad_images
 
-torch.set_num_threads(cpu_count())
+torch.set_num_threads(cpu_count() // 2)
 
 # Constants from the performance optimization available in onnxruntime
 # It needs to be done before importing onnxruntime
-environ["OMP_NUM_THREADS"] = str(cpu_count())
+environ["OMP_NUM_THREADS"] = str(cpu_count() // 2)
 environ["OMP_WAIT_POLICY"] = 'ACTIVE'
 
 logger = logging.getLogger(__name__)
 
 try:
     from onnxruntime import InferenceSession, SessionOptions, GraphOptimizationLevel
-    from onnxruntime_tools import optimizer
-    from onnxruntime_tools.transformers.onnx_model_bert import BertOptimizationOptions
 except:
     logger.warning('Could not import ONNX inference tools!')
 
@@ -273,7 +273,15 @@ class SpanNERModel(SerializableModel):
         head_mask = mask_heads(self, dataloader, prune_fraction=prune_fraction, num_iter=prune_iter)
         prune_heads(self, head_mask)
 
-    def optimize(self, onnx_dir: Path, fuse: bool = True, quant: bool = True) -> None:
+    def optimize(
+            self,
+            onnx_dir: Path,
+            fuse: bool = True,
+            quant: bool = True,
+            opset_version: int = 13,
+            do_constant_folding: bool = True
+    ) -> None:
+
         if self._optimized:
             raise RuntimeError(f'{self.__class__.__name__} has already been optimized!')
         self.eval()
@@ -292,12 +300,12 @@ class SpanNERModel(SerializableModel):
             self._encoder,
             ({'input_ids': model_inputs['input_ids'], 'attention_mask': model_inputs['attention_mask']},),
             f=onnx_model_path.as_posix(),
-            verbose=True,
+            verbose=False,
             input_names=('input_ids', 'attention_mask'),
             output_names=('last_hidden_state',),
             dynamic_axes={'input_ids': dynamic_axes, 'attention_mask': dynamic_axes, 'last_hidden_state': dynamic_axes},
-            do_constant_folding=True,
-            opset_version=11,
+            do_constant_folding=do_constant_folding,
+            opset_version=opset_version,
         )
 
         if fuse:

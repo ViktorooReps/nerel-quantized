@@ -1,7 +1,7 @@
 import logging
 import time
 from pathlib import Path
-from typing import List, Iterable, Set, Tuple, Dict
+from typing import Iterable, Set, Tuple, Dict, Sequence
 
 import numpy as np
 
@@ -12,7 +12,7 @@ from quant.utils import invert
 
 class Solution:
 
-    model_path = Path('onnx/main.pkl')
+    model_path = Path('labse_10epochs_cpu.pkl')
     exclude_filenames = {
         '165459_text', '176167_text', '178485_text', '192238_text',
         '193267_text', '193946_text', '194112_text', '2021',
@@ -20,9 +20,9 @@ class Solution:
     }
 
     @classmethod
-    def predict(cls, texts: List[str]) -> Iterable[Set[Tuple[TypedSpan]]]:
+    def predict(cls, texts: Sequence[str]) -> Iterable[Set[Tuple[TypedSpan]]]:
         model = SpanNERModel.load(cls.model_path)
-        return model.predict(texts)
+        return model.predict(list(texts))
 
     @classmethod
     def evaluate(cls):
