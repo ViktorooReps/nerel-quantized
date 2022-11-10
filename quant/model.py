@@ -248,7 +248,7 @@ class SpanNERModel(SerializableModel):
 
             recall_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_labels_mask], labels[entity_labels_mask])
             precision_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_predictions_mask], labels[entity_predictions_mask])
-            return (recall_loss + precision_loss, predictions) + (attention_scores,) if return_attention_scores else tuple()
+            return (recall_loss + precision_loss, predictions) + ((attention_scores,) if return_attention_scores else tuple())
 
         if return_attention_scores:
             return predictions, attention_scores
