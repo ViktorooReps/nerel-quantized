@@ -2,7 +2,6 @@
 SOURCE: https://github.com/huggingface/transformers/blob/main/examples/research_projects/bertology/run_bertology.py
 """
 import logging
-from typing import Tuple
 
 import torch
 from torch import Tensor, BoolTensor
@@ -14,38 +13,19 @@ from quant.datamodel import BatchedExamples
 logger = logging.getLogger(__name__)
 
 
-def entropy(p):
-    """Compute the entropy of a probability distribution"""
-    plogp = p * torch.log(p)
-    plogp[p == 0] = 0
-    return -plogp.sum(dim=-1)
-
-
-def compute_heads_importance(
-    model,
-    eval_dataloader: DataLoader,
-    compute_entropy=True,
-    compute_importance=True,
-    head_mask=None,
-    actually_pruned=False,
-    device: torch.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-) -> Tuple[Tensor, Tensor]:
+def compute_heads_importance(model, eval_dataloader: DataLoader, head_mask: Tensor = None) -> Tensor:
     """This method shows how to compute:
     - head attention entropy
     - head importance scores according to http://arxiv.org/abs/1905.10650
     """
     # Prepare our tensors
     n_layers, n_heads = model._encoder.config.num_hidden_layers, model._encoder.config.num_attention_heads
-    head_importance = torch.zeros(n_layers, n_heads).to(device)
-    attn_entropy = torch.zeros(n_layers, n_heads).to(device)
+    head_importance = torch.zeros(n_layers, n_heads).to(model.device)
 
     if head_mask is None:
-        head_mask = torch.ones(n_layers, n_heads).to(device)
+        head_mask = torch.ones(n_layers, n_heads).to(model.device)
 
     head_mask.requires_grad_(requires_grad=True)
-    # If actually pruned attention multi-head, set head mask to None to avoid shape mismatch
-    if actually_pruned:
-        head_mask = None
 
     tot_tokens = 0.0
 
@@ -57,18 +37,11 @@ def compute_heads_importance(
         loss, _, all_attentions = model(**inputs, encoder_head_mask=head_mask, return_attention_scores=True)
         loss.backward()  # Backpropagate to populate the gradients in the head mask
 
-        if compute_entropy:
-            for layer, attn in enumerate(all_attentions):
-                masked_entropy = entropy(attn.detach()) * examples.padding_mask.float().unsqueeze(1)
-                attn_entropy[layer] += masked_entropy.sum(-1).sum(0).detach()
-
-        if compute_importance:
-            head_importance += head_mask.grad.abs().detach()
+        head_importance += head_mask.grad.abs().detach()
 
         tot_tokens += examples.padding_mask.float().detach().sum().data
 
     # Normalize
-    attn_entropy /= tot_tokens
     head_importance /= tot_tokens
     # Layerwise importance normalization
 
@@ -78,14 +51,14 @@ def compute_heads_importance(
 
     head_importance = (head_importance - head_importance.min()) / (head_importance.max() - head_importance.min())
 
-    return attn_entropy, head_importance
+    return head_importance
 
 
 def mask_heads(model, eval_dataloader: DataLoader, prune_fraction: float = 0.1, num_iter: int = 5) -> BoolTensor:
     """This method shows how to mask head (set some heads to zero), to test the effect on the network,
     based on the head importance scores, as described in Michel et al. (http://arxiv.org/abs/1905.10650)
     """
-    _, head_importance = compute_heads_importance(model, eval_dataloader, compute_entropy=False, device=model.device)
+    head_importance = compute_heads_importance(model, eval_dataloader)
 
     new_head_mask = torch.ones_like(head_importance)
     head_mask = new_head_mask.clone()
@@ -117,9 +90,7 @@ def mask_heads(model, eval_dataloader: DataLoader, prune_fraction: float = 0.1, 
         new_head_mask = new_head_mask.clone().detach()
 
         # Compute metric and head importance again
-        _, head_importance = compute_heads_importance(
-            model, eval_dataloader, compute_entropy=False, head_mask=new_head_mask
-        )
+        head_importance = compute_heads_importance(model, eval_dataloader, head_mask=new_head_mask)
 
     return head_mask
 
@@ -132,4 +103,4 @@ def prune_heads(model, head_mask: BoolTensor):
         (layer, (1 - head_mask[layer].long()).nonzero().squeeze().tolist()) for layer in range(len(head_mask))
     )
 
-    model._encoder.prune_heads(heads_to_prune)
+    model._encoder.prune_heads(heads_to_prune)  # TODO
