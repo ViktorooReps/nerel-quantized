@@ -25,7 +25,7 @@ from transformers.tokenization_utils_base import EncodingFast
 
 from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples, read_nerel, DatasetType, collate_examples
 from quant.pruner import mask_heads, prune_heads
-from quant.utils import invert, to_numpy, pad_images
+from quant.utils import invert, to_numpy, pad_images, FocalLoss
 
 torch.set_num_threads(cpu_count() // 2)
 
@@ -69,6 +69,12 @@ class SerializableModel(Module):
             return pickle.load(f)
 
 
+LOSSES = {
+    'cross_entropy': CrossEntropyLoss,
+    'focal': FocalLoss
+}
+
+
 @dataclass
 class ModelArguments:
     bert_model: str = field(metadata={'help': 'Name of the BERT HuggingFace model to use.'})
@@ -76,6 +82,7 @@ class ModelArguments:
     dropout: float = field(default=0.5, metadata={'help': 'Dropout for BERT representations.'})
     reduced_dim: int = field(default=128, metadata={'help': 'Reduced token representation.'})
     max_context_length: int = field(default=None, metadata={'help': 'Context length (same as model by default)'})
+    loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
 
 class SpanNERModel(SerializableModel):
@@ -84,6 +91,7 @@ class SpanNERModel(SerializableModel):
         super().__init__()
 
         self._no_entity_category = 'NO_ENTITY'
+        self._loss_fn = LOSSES[model_args.loss_class](reduction='mean')
 
         categories.add(self._no_entity_category)
         self._n_categories = len(categories)
@@ -244,8 +252,8 @@ class SpanNERModel(SerializableModel):
             entity_labels_mask = labels_mask & (labels != self._no_entity_id)
             entity_predictions_mask = predictions_mask & (predictions != self._no_entity_id)
 
-            recall_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_labels_mask], labels[entity_labels_mask])
-            precision_loss = CrossEntropyLoss(reduction='mean')(category_scores[entity_predictions_mask], labels[entity_predictions_mask])
+            recall_loss = self._loss_fn(category_scores[entity_labels_mask], labels[entity_labels_mask])
+            precision_loss = self._loss_fn(category_scores[entity_predictions_mask], labels[entity_predictions_mask])
             return (recall_loss + precision_loss, predictions) + ((attention_scores,) if return_attention_scores else tuple())
 
         if return_attention_scores:
