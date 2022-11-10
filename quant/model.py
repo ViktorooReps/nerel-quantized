@@ -253,7 +253,7 @@ class SpanNERModel(SerializableModel):
             return predictions, attention_scores
         return predictions
 
-    def prune(self, dataset_dir: Path, prune_fraction: float = 0.1, prune_iter: int = 5):
+    def prune(self, dataset_dir: Path, prune_fraction: float = 0.1, prune_iter: int = 5, batch_size: int = 16):
         if self._optimized:
             raise RuntimeError(f'{self.__class__.__name__} has already been optimized!')
         self.eval()
@@ -266,7 +266,7 @@ class SpanNERModel(SerializableModel):
         dataloader = DataLoader(
             dev_dataset,
             shuffle=False,
-            batch_size=1,
+            batch_size=batch_size,
             collate_fn=partial(collate_examples, pad_length=self._context_length)
         )
         head_mask = mask_heads(self, dataloader, prune_fraction=prune_fraction, num_iter=prune_iter)

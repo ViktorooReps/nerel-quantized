@@ -2,6 +2,7 @@
 SOURCE: https://github.com/huggingface/transformers/blob/main/examples/research_projects/bertology/run_bertology.py
 """
 import logging
+import pprint
 
 import torch
 from torch import Tensor, BoolTensor
@@ -91,6 +92,8 @@ def mask_heads(model, eval_dataloader: DataLoader, prune_fraction: float = 0.1, 
 
         # Compute metric and head importance again
         head_importance = compute_heads_importance(model, eval_dataloader, head_mask=new_head_mask)
+
+    logger.info(f'Final mask: {pprint.pformat(head_mask.tolist())}')
 
     return head_mask
 
