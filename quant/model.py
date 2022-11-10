@@ -12,7 +12,7 @@ import torch
 from onnxruntime.transformers import optimizer
 from onnxruntime.transformers.onnx_model_bert import BertOptimizationOptions
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear, Embedding, LayerNorm
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear
 from torch.nn.functional import pad
 from torch.onnx import export
 from torch.utils.data import DataLoader
@@ -105,16 +105,13 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
-        self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, model_args.reduced_dim)
-        self._length_embedding = Embedding(num_embeddings=limit_entity_length, embedding_dim=model_args.reduced_dim)
-        self._normalization = LayerNorm(model_args.reduced_dim)
-        self._classifier = Linear(model_args.reduced_dim, self._n_categories)
+        self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
 
         positions = torch.arange(self._context_length)
         start_positions = positions.unsqueeze(-1).repeat(1, self._context_length)
         end_positions = positions.unsqueeze(-2).repeat(self._context_length, 1)
-        self._entity_lengths = end_positions - start_positions + 1
-        self._size_limit_mask = torch.triu((self._entity_lengths > 0) & (self._entity_lengths < limit_entity_length))
+        entity_lengths = end_positions - start_positions + 1
+        self._size_limit_mask = torch.triu((entity_lengths > 0) & (entity_lengths < limit_entity_length))
 
         self._optimized = False
 
@@ -210,13 +207,6 @@ class SpanNERModel(SerializableModel):
         if return_attention_scores and self._optimized:
             raise NotImplementedError
 
-        start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
-        end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
-        padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
-
-        size_limit_mask = self._size_limit_mask.to(self.device)
-        predictions_mask = size_limit_mask & padding_image
-
         encoded: BaseModelOutput = self._encoder(
             input_ids=examples.input_ids.to(self.device),
             attention_mask=examples.padding_mask.to(self.device),
@@ -232,13 +222,17 @@ class SpanNERModel(SerializableModel):
         start_representation = self._dropout(self._activation(self._start_projection(representation))).unsqueeze(-2)  # (B, M, 1, R)
         end_representation = self._dropout(self._activation(self._end_projection(representation))).unsqueeze(-3)  # (B, 1, M, R)
 
-        category_embedding = self._transition(
+        category_scores = self._transition(
             start_representation.repeat(1, 1, self._context_length, 1),
             end_representation.repeat(1, self._context_length, 1, 1)
-        )  # (B, M, M, R)
-        lengths = self._entity_lengths.to(self.device).unsqueeze(0).repeat(batch_size, 1, 1)[predictions_mask]
-        category_embedding[predictions_mask] += self._length_embedding(lengths)
-        category_scores = self._classifier(self._normalization(category_embedding))
+        )  # (B, M, M, C)
+
+        start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
+        end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
+        padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
+
+        size_limit_mask = self._size_limit_mask.to(self.device)
+        predictions_mask = size_limit_mask & padding_image
 
         predictions = torch.argmax(category_scores, dim=-1)
         predictions[~predictions_mask] = -100
