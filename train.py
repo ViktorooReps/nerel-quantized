@@ -9,7 +9,9 @@ from sklearn.metrics import f1_score, recall_score, precision_score
 from torch import Tensor, LongTensor
 from torch.nn.functional import pad
 from torch.utils.data import Dataset
+from torch.utils.tensorboard import SummaryWriter
 from transformers import Trainer, HfArgumentParser, TrainingArguments, EvalPrediction
+from transformers.integrations import TensorBoardCallback
 from transformers.modeling_utils import unwrap_model
 
 from quant.datamodel import read_nerel, DatasetType, Example, collate_examples, collect_categories, get_dataset_files
@@ -98,6 +100,7 @@ def pad_predictions(predictions: Tensor, _: LongTensor, *, padding_length: int) 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
+    tb_writer = SummaryWriter()
 
     parser = HfArgumentParser(dataclass_types=[ModelArguments, DatasetArguments, TrainingArguments])
     model_args, dataset_args, training_args = parser.parse_args_into_dataclasses()
@@ -129,7 +132,7 @@ if __name__ == '__main__':
             no_entity_category_id=model.no_entity_category_id
         ),
         preprocess_logits_for_metrics=partial(pad_predictions, padding_length=model.context_length),
-        callbacks=None  # TODO
+        callbacks=[TensorBoardCallback()]
     )
     trainer.train()
 
@@ -137,3 +140,7 @@ if __name__ == '__main__':
     trained_model: SpanNERModel = unwrap_model(trainer.model_wrapped)
     trained_model.cpu()
     trained_model.save(model_args.save_path)
+
+    metrics = trainer.evaluate()
+
+    tb_writer.add_hparams(hparam_dict={**model_args.__dict__, **training_args.__dict__}, metric_dict=metrics)
