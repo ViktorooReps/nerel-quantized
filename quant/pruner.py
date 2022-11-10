@@ -3,6 +3,7 @@ SOURCE: https://github.com/huggingface/transformers/blob/main/examples/research_
 """
 import logging
 import pprint
+from typing import List, Union
 
 import torch
 from torch import Tensor, BoolTensor, FloatTensor
@@ -102,8 +103,16 @@ def prune_heads(model, head_mask: FloatTensor):
     """This method shows how to prune head (remove heads weights) based on
     the head importance scores as described in Michel et al. (http://arxiv.org/abs/1905.10650)
     """
+    def maybe_wrap(obj: Union[int, List[int]]) -> List[int]:
+        if isinstance(obj, list):
+            return obj
+        return [obj]
+
     heads_to_prune = dict(
-        (layer, (1 - head_mask[layer].long()).nonzero().squeeze().tolist()) for layer in range(len(head_mask))
+        (
+            layer,
+            maybe_wrap((1 - head_mask[layer].long()).nonzero().squeeze().tolist())
+        ) for layer in range(len(head_mask))
     )
 
     logger.info(f'\nHeads to prune: \n{pprint.pformat(heads_to_prune)}')
