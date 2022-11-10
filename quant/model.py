@@ -236,7 +236,7 @@ class SpanNERModel(SerializableModel):
             start_representation.repeat(1, 1, self._context_length, 1),
             end_representation.repeat(1, self._context_length, 1, 1)
         )  # (B, M, M, R)
-        lengths = self._entity_lengths.unsqueeze(0).repeat(batch_size, 1, 1)[predictions_mask]
+        lengths = self._entity_lengths.to(self.device).unsqueeze(0).repeat(batch_size, 1, 1)[predictions_mask]
         category_embedding[predictions_mask] += self._length_embedding[lengths]
         category_scores = self._classifier(self._normalization(category_embedding))
 
