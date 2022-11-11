@@ -8,12 +8,13 @@ from os import environ, cpu_count
 from pathlib import Path
 from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
+import numpy as np
 import torch
 from onnxruntime.transformers import optimizer
 from onnxruntime.transformers.onnx_model_bert import BertOptimizationOptions
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear
-from torch.nn.functional import pad
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear, LayerNorm
+from torch.nn.functional import pad, softmax
 from torch.onnx import export
 from torch.utils.data import DataLoader
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
@@ -85,6 +86,38 @@ class ModelArguments:
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
 
+class ScaledDotProductAttention(Module):
+    """
+    Scaled Dot-Product Attention proposed in "Attention Is All You Need"
+    Compute the dot products of the query with all keys, divide each by sqrt(dim),
+    and apply a softmax function to obtain the weights on the values
+    Args: dim, mask
+        dim (int): dimention of attention
+        mask (torch.Tensor): tensor containing indices to be masked
+    Inputs: query, key, value, mask
+        - **query** (batch, q_len, d_model): tensor containing projection vector for decoder.
+        - **key** (batch, k_len, d_model): tensor containing projection vector for encoder.
+        - **value** (batch, v_len, d_model): tensor containing features of the encoded input sequence.
+        - **mask** (-): tensor containing indices to be masked
+    Returns: context, attn
+        - **context**: tensor containing the context vector from attention mechanism.
+        - **attn**: tensor containing the attention (alignment) from the encoder outputs.
+    """
+    def __init__(self, dim: int):
+        super(ScaledDotProductAttention, self).__init__()
+        self.sqrt_dim = np.sqrt(dim)
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+        score = torch.bmm(query, key.transpose(1, 2)) / self.sqrt_dim
+
+        if mask is not None:
+            score.masked_fill_(mask.view(score.size()), -float('Inf'))
+
+        attn = softmax(score, -1)
+        context = torch.bmm(attn, value)
+        return context, attn
+
+
 class SpanNERModel(SerializableModel):
 
     def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 20):
@@ -109,9 +142,12 @@ class SpanNERModel(SerializableModel):
         n_features = self._encoder.config.hidden_size
 
         self._dropout = Dropout(model_args.dropout)
+        self._attention = ScaledDotProductAttention(dim=n_features)
         self._start_projection = Linear(n_features, model_args.reduced_dim)
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
+        self._start_normalization = LayerNorm(n_features)
+        self._end_normalization = LayerNorm(n_features)
 
         self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
 
@@ -227,8 +263,17 @@ class SpanNERModel(SerializableModel):
 
         representation = pad(representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
-        start_representation = self._dropout(self._activation(self._start_projection(representation))).unsqueeze(-2)  # (B, M, 1, R)
-        end_representation = self._dropout(self._activation(self._end_projection(representation))).unsqueeze(-3)  # (B, 1, M, R)
+        start_representation = self._dropout(representation)
+        start_representation = self._start_projection(start_representation)
+        start_representation = self._activation(start_representation)
+        start_representation = self._attention(start_representation)
+        start_representation = self._start_normalization(start_representation)
+
+        end_representation = self._dropout(representation)
+        end_representation = self._start_projection(end_representation)
+        end_representation = self._activation(end_representation)
+        end_representation = self._attention(end_representation)
+        end_representation = self._end_normalization(end_representation)
 
         category_scores = self._transition(
             start_representation.repeat(1, 1, self._context_length, 1),
