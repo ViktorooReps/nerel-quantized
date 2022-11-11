@@ -3,8 +3,8 @@ from typing import TypeVar, Dict, List, Any, Optional
 
 import numpy as np
 import torch
-from torch import Tensor
-from torch.nn.functional import pad, binary_cross_entropy_with_logits
+from torch import Tensor, Module
+from torch.nn.functional import pad, binary_cross_entropy_with_logits, one_hot, softmax
 
 _K = TypeVar('_K')
 _V = TypeVar('_V')
@@ -39,50 +39,57 @@ def to_numpy(tensor: Tensor) -> np.ndarray:
     return tensor.detach().cpu().numpy()
 
 
-def sigmoid_focal_loss(
-    inputs: Tensor,
-    targets: Tensor,
-    alpha: float = 0.25,
-    gamma: float = 2,
-    reduction: str = "none",
-):
+class FocalLoss(Module):
+    r"""Criterion that computes Focal loss.
+
+    According to [1], the Focal loss is computed as follows:
+
+    .. math::
+
+        \text{FL}(p_t) = -\alpha_t (1 - p_t)^{\gamma} \, \text{log}(p_t)
+
+    where:
+       - :math:`p_t` is the model's estimated probability for each class.
+
+
+    Arguments:
+        alpha (float): Weighting factor :math:`\alpha \in [0, 1]`.
+        gamma (float): Focusing parameter :math:`\gamma >= 0`.
+        reduction (Optional[str]): Specifies the reduction to apply to the
+         output: ‘none’ | ‘mean’ | ‘sum’. ‘none’: no reduction will be applied,
+         ‘mean’: the sum of the output will be divided by the number of elements
+         in the output, ‘sum’: the output will be summed. Default: ‘none’.
+
+    References:
+        [1] https://arxiv.org/abs/1708.02002
     """
-    Original implementation from https://github.com/facebookresearch/fvcore/blob/master/fvcore/nn/focal_loss.py .
-    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
 
-    Args:
-        inputs: A float tensor of arbitrary shape.
-                The predictions for each example.
-        targets: A float tensor with the same shape as inputs. Stores the binary
-                classification label for each element in inputs
-                (0 for the negative class and 1 for the positive class).
-        alpha: (optional) Weighting factor in range (0,1) to balance
-                positive vs negative examples or -1 for ignore. Default = 0.25
-        gamma: Exponent of the modulating factor (1 - p_t) to
-               balance easy vs hard examples.
-        reduction: 'none' | 'mean' | 'sum'
-                 'none': No reduction will be applied to the output.
-                 'mean': The output will be averaged.
-                 'sum': The output will be summed.
-    Returns:
-        Loss tensor with the reduction option applied.
-    """
-    p = torch.sigmoid(inputs)
-    ce_loss = binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-    p_t = p * targets + (1 - p) * (1 - targets)
-    loss = ce_loss * ((1 - p_t) ** gamma)
+    def __init__(self, alpha: float, gamma: Optional[float] = 2.0, reduction: Optional[str] = 'none') -> None:
+        super(FocalLoss, self).__init__()
+        self.alpha: float = alpha
+        self.gamma: Optional[float] = gamma
+        self.reduction: Optional[str] = reduction
+        self.eps: float = 1e-6
 
-    if alpha >= 0:
-        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-        loss = alpha_t * loss
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        # compute softmax over the classes axis
+        input_soft = softmax(input, dim=-1) + self.eps
 
-    if reduction == "mean":
-        loss = loss.mean()
-    elif reduction == "sum":
-        loss = loss.sum()
+        # create the labels one hot tensor
+        target_one_hot = one_hot(target, num_classes=input.shape[-1], device=input.device, dtype=input.dtype)
 
-    return loss
+        # compute the actual focal loss
+        weight = torch.pow(1. - input_soft, self.gamma)
+        focal = -self.alpha * weight * torch.log(input_soft)
+        loss_tmp = torch.sum(target_one_hot * focal, dim=-1)
 
-
-FocalLoss = lambda reduction: partial(sigmoid_focal_loss, reduction=reduction)
+        if self.reduction == 'none':
+            loss = loss_tmp
+        elif self.reduction == 'mean':
+            loss = torch.mean(loss_tmp)
+        elif self.reduction == 'sum':
+            loss = torch.sum(loss_tmp)
+        else:
+            raise NotImplementedError("Invalid reduction mode: {}".format(self.reduction))
+        return loss
 
