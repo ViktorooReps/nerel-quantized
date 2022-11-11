@@ -64,12 +64,12 @@ class FocalLoss(Module):
         [1] https://arxiv.org/abs/1708.02002
     """
 
-    def __init__(self, alpha: float, gamma: Optional[float] = 2.0, reduction: Optional[str] = 'none') -> None:
+    def __init__(self, alpha: float = 0.3, gamma: float = 3.0, reduction: str = 'none') -> None:
         super(FocalLoss, self).__init__()
-        self.alpha: float = alpha
-        self.gamma: Optional[float] = gamma
-        self.reduction: Optional[str] = reduction
-        self.eps: float = 1e-6
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction: str = reduction
+        self.eps = 1e-6
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         # compute softmax over the classes axis
