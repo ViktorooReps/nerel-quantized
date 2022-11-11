@@ -111,6 +111,7 @@ class ScaledDotProductSelfAttention(Module):
         score = torch.bmm(value, value.transpose(1, 2)) / self.sqrt_dim
 
         if mask is not None:
+            mask = ~mask
             score.masked_fill_(mask.view(score.size()), -float('Inf'))
 
         attn = softmax(score, -1)
@@ -286,7 +287,7 @@ class SpanNERModel(SerializableModel):
             end_representation.unsqueeze(-3).repeat(1, self._context_length, 1, 1)
         )  # (B, M, M, C)
 
-        padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
+        padding_image = pad_images(padding_image, padding_length=self._context_length, padding_value=False)
 
         size_limit_mask = self._size_limit_mask.to(self.device)
         predictions_mask = size_limit_mask & padding_image
