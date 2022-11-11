@@ -1,10 +1,10 @@
-from functools import partial
 from typing import TypeVar, Dict, List, Any, Optional
 
 import numpy as np
 import torch
-from torch import Tensor, Module
-from torch.nn.functional import pad, binary_cross_entropy_with_logits, one_hot, softmax
+from torch import Tensor
+from torch.nn import Module
+from torch.nn.functional import pad, one_hot, softmax
 
 _K = TypeVar('_K')
 _V = TypeVar('_V')
@@ -92,4 +92,3 @@ class FocalLoss(Module):
         else:
             raise NotImplementedError("Invalid reduction mode: {}".format(self.reduction))
         return loss
-
