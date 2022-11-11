@@ -146,8 +146,8 @@ class SpanNERModel(SerializableModel):
         self._start_projection = Linear(n_features, model_args.reduced_dim)
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
-        self._start_normalization = LayerNorm(n_features)
-        self._end_normalization = LayerNorm(n_features)
+        self._start_normalization = LayerNorm(model_args.reduced_dim)
+        self._end_normalization = LayerNorm(model_args.reduced_dim)
 
         self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
 
