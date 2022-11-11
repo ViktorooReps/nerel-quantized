@@ -266,13 +266,13 @@ class SpanNERModel(SerializableModel):
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
         start_representation = self._activation(start_representation)
-        start_representation = self._attention(start_representation)
+        start_representation = self._attention(start_representation, start_representation, start_representation)
         start_representation = self._start_normalization(start_representation)
 
         end_representation = self._dropout(representation)
         end_representation = self._start_projection(end_representation)
         end_representation = self._activation(end_representation)
-        end_representation = self._attention(end_representation)
+        end_representation = self._attention(end_representation, end_representation, end_representation)
         end_representation = self._end_normalization(end_representation)
 
         category_scores = self._transition(
