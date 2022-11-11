@@ -81,7 +81,7 @@ class ModelArguments:
     bert_model: str = field(metadata={'help': 'Name of the BERT HuggingFace model to use.'})
     save_path: Path = field(metadata={'help': 'Trained model save path.'})
     dropout: float = field(default=0.5, metadata={'help': 'Dropout for BERT representations.'})
-    reduced_dim: int = field(default=128, metadata={'help': 'Reduced token representation.'})
+    reduced_dim: int = field(default=64, metadata={'help': 'Reduced token representation.'})
     max_context_length: int = field(default=None, metadata={'help': 'Context length (same as model by default)'})
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
@@ -276,8 +276,8 @@ class SpanNERModel(SerializableModel):
         end_representation = self._end_normalization(end_representation)
 
         category_scores = self._transition(
-            start_representation.repeat(1, 1, self._context_length, 1),
-            end_representation.repeat(1, self._context_length, 1, 1)
+            start_representation.unsqueeze(-2).repeat(1, 1, self._context_length, 1),
+            end_representation.unsqueeze(-3).repeat(1, self._context_length, 1, 1)
         )  # (B, M, M, C)
 
         start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
