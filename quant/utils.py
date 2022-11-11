@@ -76,7 +76,7 @@ class FocalLoss(Module):
         input_soft = softmax(input, dim=-1) + self.eps
 
         # create the labels one hot tensor
-        target_one_hot = one_hot(target, num_classes=input.shape[-1], dtype=input.dtype)
+        target_one_hot = one_hot(target, num_classes=input.shape[-1])
 
         # compute the actual focal loss
         weight = torch.pow(1. - input_soft, self.gamma)
