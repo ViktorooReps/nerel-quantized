@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Iterable, Dict
+from typing import Iterable, Dict, Any
 
 import numpy as np
 from sklearn.metrics import f1_score, recall_score, precision_score
@@ -143,4 +143,7 @@ if __name__ == '__main__':
 
     metrics = trainer.evaluate()
 
-    tb_writer.add_hparams(hparam_dict={**model_args.__dict__, **training_args.__dict__}, metric_dict=metrics)
+    def normalize(d: Dict[str, Any]) -> Dict[str, str]:
+        return {k: str(v) for k, v in d.items()}
+
+    tb_writer.add_hparams(hparam_dict={**normalize(model_args.__dict__), **normalize(training_args.__dict__)}, metric_dict=metrics)
