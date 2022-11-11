@@ -86,7 +86,7 @@ class ModelArguments:
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
 
-class ScaledDotProductAttention(Module):
+class ScaledDotProductSelfAttention(Module):
     """
     Scaled Dot-Product Attention proposed in "Attention Is All You Need"
     Compute the dot products of the query with all keys, divide each by sqrt(dim),
@@ -104,11 +104,11 @@ class ScaledDotProductAttention(Module):
         - **attn**: tensor containing the attention (alignment) from the encoder outputs.
     """
     def __init__(self, dim: int):
-        super(ScaledDotProductAttention, self).__init__()
+        super(ScaledDotProductSelfAttention, self).__init__()
         self.sqrt_dim = np.sqrt(dim)
 
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
-        score = torch.bmm(query, key.transpose(1, 2)) / self.sqrt_dim
+    def forward(self, value: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+        score = torch.bmm(value, value.transpose(1, 2)) / self.sqrt_dim
 
         if mask is not None:
             score.masked_fill_(mask.view(score.size()), -float('Inf'))
@@ -142,7 +142,7 @@ class SpanNERModel(SerializableModel):
         n_features = self._encoder.config.hidden_size
 
         self._dropout = Dropout(model_args.dropout)
-        self._attention = ScaledDotProductAttention(dim=n_features)
+        self._attention = ScaledDotProductSelfAttention(dim=n_features)
         self._start_projection = Linear(n_features, model_args.reduced_dim)
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
@@ -261,19 +261,21 @@ class SpanNERModel(SerializableModel):
 
         batch_size, sequence_length, num_features = representation.shape
 
-        representation = pad(representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
-
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
         start_representation = self._activation(start_representation)
-        start_representation, _ = self._attention(start_representation, start_representation, start_representation)
+        start_representation, _ = self._attention(start_representation, mask=examples.padding_mask)
         start_representation = self._start_normalization(start_representation)
+
+        start_representation = pad(start_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         end_representation = self._dropout(representation)
         end_representation = self._start_projection(end_representation)
         end_representation = self._activation(end_representation)
-        end_representation, _ = self._attention(end_representation, end_representation, end_representation)
+        end_representation, _ = self._attention(end_representation, mask=examples.padding_mask)
         end_representation = self._end_normalization(end_representation)
+
+        end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         category_scores = self._transition(
             start_representation.unsqueeze(-2).repeat(1, 1, self._context_length, 1),
