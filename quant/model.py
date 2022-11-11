@@ -268,7 +268,7 @@ class SpanNERModel(SerializableModel):
 
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
-        start_representation = self._activation(start_representation)
+        # start_representation = self._activation(start_representation)
         start_representation, _ = self._attention(start_representation, mask=padding_image)
         # start_representation = self._start_normalization(start_representation)
 
@@ -276,7 +276,7 @@ class SpanNERModel(SerializableModel):
 
         end_representation = self._dropout(representation)
         end_representation = self._start_projection(end_representation)
-        end_representation = self._activation(end_representation)
+        # end_representation = self._activation(end_representation)
         end_representation, _ = self._attention(end_representation, mask=padding_image)
         # end_representation = self._end_normalization(end_representation)
 
