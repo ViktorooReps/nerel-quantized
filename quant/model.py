@@ -261,10 +261,14 @@ class SpanNERModel(SerializableModel):
 
         batch_size, sequence_length, num_features = representation.shape
 
+        start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
+        end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
+        padding_image = start_padding_mask & end_padding_mask
+
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
         start_representation = self._activation(start_representation)
-        start_representation, _ = self._attention(start_representation, mask=examples.padding_mask)
+        start_representation, _ = self._attention(start_representation, mask=padding_image)
         start_representation = self._start_normalization(start_representation)
 
         start_representation = pad(start_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
@@ -272,7 +276,7 @@ class SpanNERModel(SerializableModel):
         end_representation = self._dropout(representation)
         end_representation = self._start_projection(end_representation)
         end_representation = self._activation(end_representation)
-        end_representation, _ = self._attention(end_representation, mask=examples.padding_mask)
+        end_representation, _ = self._attention(end_representation, mask=padding_image)
         end_representation = self._end_normalization(end_representation)
 
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
@@ -282,8 +286,6 @@ class SpanNERModel(SerializableModel):
             end_representation.unsqueeze(-3).repeat(1, self._context_length, 1, 1)
         )  # (B, M, M, C)
 
-        start_padding_mask = examples.padding_mask.unsqueeze(-2).to(self.device)
-        end_padding_mask = examples.padding_mask.unsqueeze(-1).to(self.device)
         padding_image = pad_images(start_padding_mask & end_padding_mask, padding_length=self._context_length, padding_value=False)
 
         size_limit_mask = self._size_limit_mask.to(self.device)
