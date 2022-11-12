@@ -24,6 +24,7 @@ from transformers.models.lxmert.modeling_lxmert import GeLU
 from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.tokenization_utils_base import EncodingFast
 
+from bilinear.chunked import ChunkedBilinear
 from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples, read_nerel, DatasetType, collate_examples
 from quant.pruner import mask_heads, prune_heads
 from quant.utils import invert, to_numpy, pad_images, FocalLoss
@@ -83,16 +84,18 @@ class ModelArguments:
     dropout: float = field(default=0.5, metadata={'help': 'Dropout for BERT representations.'})
     reduced_dim: int = field(default=64, metadata={'help': 'Reduced token representation.'})
     max_context_length: int = field(default=None, metadata={'help': 'Context length (same as model by default)'})
+    max_entity_length: int = field(default=32, metadata={'help': 'Expected maximum entity length.'})
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
 
 class SpanNERModel(SerializableModel):
 
-    def __init__(self, model_args: ModelArguments, categories: Set[str], limit_entity_length: int = 20):
+    def __init__(self, model_args: ModelArguments, categories: Set[str]):
         super().__init__()
 
         self._no_entity_category = 'NO_ENTITY'
         self._loss_fn = LOSSES[model_args.loss_class](reduction='mean')
+        self._max_entity_length = model_args.max_entity_length
 
         categories.add(self._no_entity_category)
         self._n_categories = len(categories)
@@ -114,13 +117,14 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
-        self._transition = Bilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
+        self._transition = ChunkedBilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
+        self._chunk_mask = self._transition.output_mask(self._context_length, self._max_entity_length)
 
         positions = torch.arange(self._context_length)
         start_positions = positions.unsqueeze(-1).repeat(1, self._context_length)
         end_positions = positions.unsqueeze(-2).repeat(self._context_length, 1)
         entity_lengths = end_positions - start_positions + 1
-        self._size_limit_mask = torch.triu((entity_lengths > 0) & (entity_lengths < limit_entity_length))
+        self._size_limit_mask: BoolTensor = torch.triu(entity_lengths < self._max_entity_length).bool()
 
         self._optimized = False
 
@@ -147,6 +151,10 @@ class SpanNERModel(SerializableModel):
     @property
     def context_length(self) -> int:
         return self._context_length
+
+    @property
+    def size_limit_mask(self) -> BoolTensor:
+        return self._size_limit_mask
 
     def train(self: _ModelType, mode: bool = True) -> _ModelType:
         if self._optimized and mode:
@@ -242,28 +250,38 @@ class SpanNERModel(SerializableModel):
 
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
-        category_scores = self._transition(
-            start_representation.unsqueeze(-2).repeat(1, 1, self._context_length, 1),
-            end_representation.unsqueeze(-3).repeat(1, self._context_length, 1, 1)
-        )  # (B, M, M, C)
+        # (B, NCh, Ch, Ch, C)
+        chunked_category_scores = self._transition(start_representation, end_representation, chunk_length=self._max_entity_length)
 
         padding_image = pad_images(padding_image, padding_length=self._context_length, padding_value=False)
 
-        size_limit_mask = self._size_limit_mask.to(self.device)
-        predictions_mask = size_limit_mask & padding_image
+        size_limit_mask = self._size_limit_mask.to(self.device)  # subset of chunk_mask
+        chunk_mask = self._chunk_mask.to(self.device).unsqueeze(0).repeat(batch_size, 1, 1)
 
-        predictions = torch.argmax(category_scores, dim=-1)
-        predictions[~predictions_mask] = -100
+        predictions_mask = size_limit_mask & padding_image
+        chunked_mask = predictions_mask[chunk_mask]  # masking for chunked predictions
+
+        chunked_category_scores = chunked_category_scores.view(-1, self._n_categories)
+        chunked_predictions = torch.argmax(chunked_category_scores, dim=-1)
+
+        predictions = torch.full_like(labels, fill_value=self._no_entity_id, dtype=torch.long)
+        predictions[predictions_mask] = chunked_predictions[chunked_mask]
 
         if labels is not None:
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
+            # loss = self._loss_fn(chunked_category_scores[chunked_mask], labels[labels_mask])
+
             entity_labels_mask = labels_mask & (labels != self._no_entity_id)
             entity_predictions_mask = predictions_mask & (predictions != self._no_entity_id)
 
-            recall_loss = self._loss_fn(category_scores[entity_labels_mask], labels[entity_labels_mask])
-            precision_loss = self._loss_fn(category_scores[entity_predictions_mask], labels[entity_predictions_mask])
+            chunked_entity_labels_mask = entity_labels_mask[chunk_mask]
+            chunked_predictions_mask = entity_predictions_mask[chunk_mask]
+
+            recall_loss = self._loss_fn(chunked_category_scores[chunked_entity_labels_mask], labels[entity_labels_mask])
+            precision_loss = self._loss_fn(chunked_category_scores[chunked_predictions_mask], labels[entity_predictions_mask])
+
             return (recall_loss + precision_loss, predictions) + ((attention_scores,) if return_attention_scores else tuple())
 
         if return_attention_scores:

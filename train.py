@@ -6,8 +6,6 @@ from typing import Iterable, Dict, Any
 
 import numpy as np
 from sklearn.metrics import f1_score, recall_score, precision_score
-from torch import Tensor, LongTensor
-from torch.nn.functional import pad
 from torch.utils.data import Dataset
 from torch.utils.tensorboard import SummaryWriter
 from transformers import Trainer, HfArgumentParser, TrainingArguments, EvalPrediction
@@ -41,20 +39,16 @@ class NERDataset(Dataset[Example]):
 def compute_metrics(
         evaluation_results: EvalPrediction,
         category_id_mapping: Dict[int, str],
-        no_entity_category_id: int
+        no_entity_category_id: int,
 ) -> Dict[str, float]:
 
-    mask = (evaluation_results.label_ids != -100)
+    padding_mask = (evaluation_results.label_ids != -100)
 
-    label_ids = evaluation_results.label_ids[mask]
-    predictions = evaluation_results.predictions[mask]
+    label_mask = np.triu(padding_mask)
+    label_ids = evaluation_results.label_ids[label_mask]
+    predictions = evaluation_results.predictions[label_mask]
 
-    unique_label_ids = np.unique(label_ids[label_ids != no_entity_category_id])
-    unique_labels = sorted(map(category_id_mapping.__getitem__, unique_label_ids))
-
-    logger.info(f'Computing metrics for {unique_labels} ({len(unique_labels)}/{len(category_id_mapping) - 1})')
-
-    unique_label_ids = set(unique_label_ids)
+    unique_label_ids = set(np.unique(label_ids[label_ids != no_entity_category_id]))
 
     labels = sorted(category_id_mapping.keys())
     f1_category_scores = f1_score(label_ids, predictions, average=None, labels=labels, zero_division=0)
@@ -90,14 +84,6 @@ def compute_metrics(
     return results
 
 
-def pad_predictions(predictions: Tensor, _: LongTensor, *, padding_length: int) -> Tensor:
-    _, curr_length, _ = predictions.shape
-    return pad(predictions, [  # IDK why tf it works
-        0, padding_length - curr_length,
-        0, padding_length - curr_length
-    ], value=-100)
-
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     tb_writer = SummaryWriter()
@@ -131,7 +117,6 @@ if __name__ == '__main__':
             category_id_mapping=model.category_id_mapping,
             no_entity_category_id=model.no_entity_category_id
         ),
-        preprocess_logits_for_metrics=partial(pad_predictions, padding_length=model.context_length),
         callbacks=[TensorBoardCallback()]
     )
     trainer.train()
