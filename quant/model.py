@@ -283,7 +283,7 @@ class SpanNERModel(SerializableModel):
             recall_loss = self._loss_fn(chunked_category_scores[chunked_entity_labels_mask], chunked_labels[chunked_entity_labels_mask])
             precision_loss = self._loss_fn(chunked_category_scores[chunked_predictions_mask], chunked_labels[chunked_predictions_mask])
 
-            return (recall_loss + precision_loss, predictions) + ((attention_scores,) if return_attention_scores else tuple())
+            return ((recall_loss + precision_loss) / 2, predictions) + ((attention_scores,) if return_attention_scores else tuple())
 
         if return_attention_scores:
             return predictions, attention_scores
