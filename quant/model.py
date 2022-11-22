@@ -251,36 +251,37 @@ class SpanNERModel(SerializableModel):
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         # (B, NCh, Ch, Ch, C)
-        chunked_category_scores = self._transition(start_representation, end_representation, chunk_length=self._max_entity_length)
+        chunked_category_scores, (row_idx, col_idx) = self._transition(
+            start_representation, end_representation,
+            chunk_length=self._max_entity_length
+        )
 
         padding_image = pad_images(padding_image, padding_length=self._context_length, padding_value=False)
 
         size_limit_mask = self._size_limit_mask.to(self.device)  # subset of chunk_mask
-        chunk_mask = self._chunk_mask.to(self.device).unsqueeze(0).repeat(batch_size, 1, 1)
 
         predictions_mask = size_limit_mask & padding_image
-        chunked_mask = predictions_mask[chunk_mask]  # masking for chunked predictions
 
         chunked_category_scores = chunked_category_scores.view(-1, self._n_categories)
         chunked_predictions = torch.argmax(chunked_category_scores, dim=-1)
 
         predictions = torch.full_like(labels, fill_value=self._no_entity_id, dtype=torch.long)
-        predictions[predictions_mask] = chunked_predictions[chunked_mask]
+        predictions[:, row_idx, col_idx] = chunked_predictions.view(batch_size, -1)
 
         if labels is not None:
             labels = labels.to(self.device)
             labels_mask = size_limit_mask & (labels != -100)
 
-            # loss = self._loss_fn(chunked_category_scores[chunked_mask], labels[labels_mask])
-
             entity_labels_mask = labels_mask & (labels != self._no_entity_id)
             entity_predictions_mask = predictions_mask & (predictions != self._no_entity_id)
 
-            chunked_entity_labels_mask = entity_labels_mask[chunk_mask]
-            chunked_predictions_mask = entity_predictions_mask[chunk_mask]
+            chunked_entity_labels_mask = entity_labels_mask[:, row_idx, col_idx].view(-1)
+            chunked_predictions_mask = entity_predictions_mask[:, row_idx, col_idx].view(-1)
 
-            recall_loss = self._loss_fn(chunked_category_scores[chunked_entity_labels_mask], labels[entity_labels_mask])
-            precision_loss = self._loss_fn(chunked_category_scores[chunked_predictions_mask], labels[entity_predictions_mask])
+            chunked_labels = labels[:, row_idx, col_idx].view(-1)
+
+            recall_loss = self._loss_fn(chunked_category_scores[chunked_entity_labels_mask], chunked_labels[chunked_entity_labels_mask])
+            precision_loss = self._loss_fn(chunked_category_scores[chunked_predictions_mask], chunked_labels[chunked_predictions_mask])
 
             return (recall_loss + precision_loss, predictions) + ((attention_scores,) if return_attention_scores else tuple())
 

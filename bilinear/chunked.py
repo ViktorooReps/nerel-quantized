@@ -1,9 +1,9 @@
 import math
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
-from torch import Tensor, bilinear, BoolTensor
-from torch.nn import Module, Parameter, init
+from torch import Tensor, bilinear, BoolTensor, LongTensor
+from torch.nn import Module, Parameter, init, Bilinear
 
 
 def split_into_chunks(
@@ -11,9 +11,11 @@ def split_into_chunks(
         chunk_length: int,
         *,
         repeat_chunks: int = 1,
-        total_chunks: Optional[int] = None,
+        drop_first: bool = False,
+        drop_last: bool = False,
+        idx_style: str = 'col',
         dim: int = 1
-) -> Tensor:
+) -> Tuple[Tensor, LongTensor]:
     batch_size, length, _ = tensor.shape
 
     if not length % chunk_length:
@@ -21,6 +23,7 @@ def split_into_chunks(
                    f'Got {length} % {chunk_length} = {length % chunk_length}')
 
     chunks: List[Tensor] = []
+    indices: List[LongTensor] = []
     for chunk_i in range(length // chunk_length):
         start_chunk = chunk_length * chunk_i
         end_chunk = start_chunk + chunk_length
@@ -29,10 +32,24 @@ def split_into_chunks(
         new_chunks = [chunk] * repeat_chunks
         chunks.extend(new_chunks)
 
-    if total_chunks is not None:
-        chunks = chunks[:total_chunks]
+        if idx_style == 'col':
+            idx = torch.arange(start_chunk, end_chunk, dtype=torch.long).repeat(chunk_length)
+        elif idx_style == 'row':
+            idx = torch.arange(start_chunk, end_chunk, dtype=torch.long).repeat_interleave(chunk_length)
+        else:
+            raise ValueError
 
-    return torch.cat(chunks, dim=dim)
+        indices.extend([idx] * repeat_chunks)
+
+    if drop_first:
+        chunks = chunks[:-1]
+        indices = indices[:-1]
+
+    if drop_last:
+        chunks = chunks[1:]
+        indices = indices[1:]
+
+    return torch.cat(chunks, dim=dim), torch.cat(indices).long()
 
 
 class ChunkedBilinear(Module):
@@ -77,15 +94,15 @@ class ChunkedBilinear(Module):
         if self._bias is not None:
             init.uniform_(self._bias, -bound, bound)
 
-    def forward(self, from_x: Tensor, to_x: Tensor, chunk_length: int) -> Tensor:
+    def forward(self, from_x: Tensor, to_x: Tensor, chunk_length: int) -> Tuple[Tensor, Tuple[List[int], List[int]]]:
         batch_size, length, _ = from_x.shape
 
         # chunk input sequences
 
         total_chunks = 2 * (length // chunk_length) - 1
 
-        from_chunks = split_into_chunks(from_x, chunk_length=chunk_length, repeat_chunks=2, total_chunks=total_chunks)
-        to_chunks = split_into_chunks(to_x, chunk_length=chunk_length, repeat_chunks=2, total_chunks=total_chunks)
+        from_chunks, row_idx = split_into_chunks(from_x, chunk_length=chunk_length, repeat_chunks=2, drop_first=True, idx_style='row')
+        to_chunks, col_idx = split_into_chunks(to_x, chunk_length=chunk_length, repeat_chunks=2, drop_last=True)
 
         # process chunks in batches
 
@@ -95,7 +112,7 @@ class ChunkedBilinear(Module):
             weight=self._weight,
             bias=self._bias
         )
-        return chunked_result.view(batch_size, total_chunks, chunk_length, chunk_length, self._out_features)
+        return chunked_result.view(batch_size, total_chunks, chunk_length, chunk_length, self._out_features), (row_idx, col_idx)
 
     @staticmethod
     def output_mask(length: int, chunk_length: int) -> BoolTensor:
@@ -119,3 +136,28 @@ class ChunkedBilinear(Module):
 
         diag_p1_blocks = [start_block] + [block(chunk_length, chunk_length) for _ in range(num_diag_blocks - 3)] + [end_block]
         return torch.block_diag(*diag_p1_blocks) | diag
+
+
+if __name__ == '__main__':
+    batch_size = 1
+    sequence_length = 10
+    chunk_length = 2
+
+    chunked_bili = ChunkedBilinear(100, 100, 5)
+    bili = Bilinear(100, 100, 5)
+    bili.weight = chunked_bili._weight
+    bili.bias = chunked_bili._bias
+
+    inp = torch.randn((batch_size, sequence_length, 100))
+    outp = torch.zeros((batch_size, sequence_length, sequence_length, 5))
+
+    res = bili(inp.unsqueeze(-2).repeat(1, 1, sequence_length, 1), inp.unsqueeze(-3).repeat(1, sequence_length, 1, 1))
+    chunked_res, (row_idx, col_idx) = chunked_bili(inp, inp, 2)
+
+    outp[:, row_idx, col_idx, :] = chunked_res.view(batch_size, -1, 5)
+
+    positions = torch.arange(10)
+    start_positions = positions.unsqueeze(-1).unsqueeze(0).repeat(batch_size, 1, sequence_length)
+    end_positions = positions.unsqueeze(-2).unsqueeze(0).repeat(batch_size, sequence_length, 1)
+
+    assert torch.allclose(res[:, row_idx, col_idx], chunked_res.view(-1, 5))
