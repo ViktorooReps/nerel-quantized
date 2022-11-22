@@ -240,13 +240,13 @@ class SpanNERModel(SerializableModel):
 
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
-        #start_representation = self._activation(start_representation)
+        start_representation = self._activation(start_representation)
 
         start_representation = pad(start_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         end_representation = self._dropout(representation)
         end_representation = self._end_projection(end_representation)
-        #end_representation = self._activation(end_representation)
+        end_representation = self._activation(end_representation)
 
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
