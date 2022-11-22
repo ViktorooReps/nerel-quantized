@@ -33,9 +33,9 @@ def split_into_chunks(
         chunks.extend(new_chunks)
 
         if idx_style == 'col':
-            idx = torch.arange(start_chunk, end_chunk, dtype=torch.long).repeat(chunk_length)
+            idx = torch.arange(start_chunk, end_chunk, dtype=torch.long, device=tensor.device).repeat(chunk_length)
         elif idx_style == 'row':
-            idx = torch.arange(start_chunk, end_chunk, dtype=torch.long).repeat_interleave(chunk_length)
+            idx = torch.arange(start_chunk, end_chunk, dtype=torch.long, device=tensor.device).repeat_interleave(chunk_length)
         else:
             raise ValueError
 
@@ -94,7 +94,7 @@ class ChunkedBilinear(Module):
         if self._bias is not None:
             init.uniform_(self._bias, -bound, bound)
 
-    def forward(self, from_x: Tensor, to_x: Tensor, chunk_length: int) -> Tuple[Tensor, Tuple[List[int], List[int]]]:
+    def forward(self, from_x: Tensor, to_x: Tensor, chunk_length: int) -> Tuple[Tensor, Tuple[LongTensor, LongTensor]]:
         batch_size, length, _ = from_x.shape
 
         # chunk input sequences
