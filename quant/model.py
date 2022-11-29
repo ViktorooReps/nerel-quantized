@@ -8,13 +8,13 @@ from os import environ, cpu_count
 from pathlib import Path
 from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 
-import numpy as np
 import torch
 from onnxruntime.transformers import optimizer
+from onnxruntime.transformers.fusion_options import FusionOptions
 from onnxruntime.transformers.onnx_model_bert import BertOptimizationOptions
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Bilinear, LayerNorm
-from torch.nn.functional import pad, softmax
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear
+from torch.nn.functional import pad
 from torch.onnx import export
 from torch.utils.data import DataLoader
 from transformers import AutoModel, AutoTokenizer, TensorType, PreTrainedTokenizer, PreTrainedModel
@@ -104,7 +104,7 @@ class SpanNERModel(SerializableModel):
         self._category_mapping = invert(self._category_id_mapping)
         self._no_entity_id = self._category_mapping[self._no_entity_category]
 
-        self._tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_args.bert_model)
+        self._tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_args.bert_model, do_lower_case=False)
         self._encoder: PreTrainedModel = AutoModel.from_pretrained(model_args.bert_model)
 
         self._context_length = self._encoder.config.max_position_embeddings
@@ -174,7 +174,7 @@ class SpanNERModel(SerializableModel):
         )
 
         all_entities: List[Set[TypedSpan]] = [set() for _ in texts]
-        for batch in batch_examples(example_iterator, batch_size=batch_size):
+        for batch in batch_examples(example_iterator, batch_size=batch_size, padding_token_id=self._tokenizer.pad_token_id):
             examples: BatchedExamples = batch['examples']
             predicted_category_ids: LongTensor = self(examples).cpu()
             _, length = examples.padding_mask.shape
@@ -265,7 +265,7 @@ class SpanNERModel(SerializableModel):
         chunked_category_scores = chunked_category_scores.view(-1, self._n_categories)
         chunked_predictions = torch.argmax(chunked_category_scores, dim=-1)
 
-        predictions = torch.full_like(labels, fill_value=self._no_entity_id, dtype=torch.long)
+        predictions = torch.full((batch_size, self._context_length, self._context_length), fill_value=self._no_entity_id, dtype=torch.long)
         predictions[:, row_idx, col_idx] = chunked_predictions.view(batch_size, -1)
 
         if labels is not None:
@@ -344,7 +344,7 @@ class SpanNERModel(SerializableModel):
         )
 
         if fuse:
-            opt_options = BertOptimizationOptions('bert')
+            opt_options = FusionOptions('bert')
             opt_options.enable_embed_layer_norm = False
 
             optimizer.optimize_model(
@@ -363,10 +363,6 @@ class SpanNERModel(SerializableModel):
         self._encoder = ONNXOptimizedEncoder(onnx_model_path)
 
         self._optimized = True
-
-    def save(self, save_path: Path) -> None:
-        with open(save_path, 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
 
 
 class ONNXOptimizedEncoder(Module):

@@ -109,7 +109,7 @@ if __name__ == '__main__':
     trainer = Trainer(
         model=model,
         args=training_args,
-        data_collator=partial(collate_examples, padding_id=model.pad_token_id, pad_length=model.context_length),
+        data_collator=partial(collate_examples, padding_token_id=model.pad_token_id, pad_length=model.context_length),
         train_dataset=train_dataset,
         eval_dataset=dev_dataset,
         compute_metrics=partial(

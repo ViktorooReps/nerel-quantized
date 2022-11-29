@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 from functools import partial
 from itertools import chain, starmap
@@ -16,6 +16,18 @@ from quant.utils import pad_images, invert
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TupleLike:
+    def __iter__(self):  # so it behaves like a NamedTuple
+        return iter(self.as_tuple())
+
+    def __hash__(self):
+        return hash(self.as_tuple())
+
+    def as_tuple(self):
+        return tuple(self.__getattribute__(field.name) for field in fields(self))
+
+
 class TypedSpan(NamedTuple):
     start: int
     end: int
@@ -23,7 +35,7 @@ class TypedSpan(NamedTuple):
 
 
 @dataclass
-class Example:
+class Example(TupleLike):
     text_id: int
     example_start: int
     input_ids: LongTensor  # shape: (LENGTH)
@@ -33,7 +45,7 @@ class Example:
 
 
 @dataclass
-class BatchedExamples:
+class BatchedExamples(TupleLike):
     text_ids: Tuple[int, ...]
     example_starts: Tuple[int, ...]
     input_ids: LongTensor  # shape: (BATCH_SIZE, LENGTH)
@@ -45,7 +57,7 @@ class BatchedExamples:
 def collate_examples(
         examples: Iterable[Example],
         *,
-        padding_id: int = -100,
+        padding_token_id: int,
         pad_length: Optional[int] = None
 ) -> Dict[str, Union[BatchedExamples, Optional[LongTensor]]]:
 
@@ -82,7 +94,7 @@ def collate_examples(
         'examples': BatchedExamples(
             tuple(all_text_ids),
             tuple(all_example_starts),
-            pad_sequence(all_input_ids, batch_first=True, padding_value=padding_id).long(),
+            pad_sequence(all_input_ids, batch_first=True, padding_value=padding_token_id).long(),
             pad_sequence(all_start_offsets, batch_first=True, padding_value=-100).long(),
             pad_sequence(all_end_offsets, batch_first=True, padding_value=-100).long(),
             pad_sequence(all_padding_masks, batch_first=True, padding_value=False).bool()
@@ -91,18 +103,23 @@ def collate_examples(
     }
 
 
-def batch_examples(examples: Iterable[Example], *, batch_size: int = 1) -> Iterable[Dict[str, Union[BatchedExamples, LongTensor]]]:
+def batch_examples(
+        examples: Iterable[Example],
+        *,
+        padding_token_id: int,
+        batch_size: int = 1
+) -> Iterable[Dict[str, Union[BatchedExamples, LongTensor]]]:
     """Groups examples into batches."""
     curr_batch = []
     for example in examples:
         if len(curr_batch) == batch_size:
-            yield collate_examples(curr_batch)
+            yield collate_examples(curr_batch, padding_token_id=padding_token_id)
             curr_batch = []
 
         curr_batch.append(example)
 
     if len(curr_batch):
-        yield collate_examples(curr_batch)
+        yield collate_examples(curr_batch, padding_token_id=padding_token_id)
 
 
 def convert_to_examples(
