@@ -267,9 +267,9 @@ class SpanNERModel(SerializableModel):
         predictions_mask = size_limit_mask & padding_image
 
         chunked_category_scores = chunked_category_scores.view(-1, self._n_categories)
-        chunked_predictions = torch.argmax(chunked_category_scores, dim=-1).cpu()
+        chunked_predictions = torch.argmax(chunked_category_scores, dim=-1)
 
-        predictions = torch.full((batch_size, self._context_length, self._context_length), fill_value=self._no_entity_id, dtype=torch.long)
+        predictions = torch.full((batch_size, self._context_length, self._context_length), fill_value=self._no_entity_id, dtype=torch.long, device=self.device)
         predictions[:, row_idx, col_idx] = chunked_predictions.view(batch_size, -1)
 
         if labels is not None:
