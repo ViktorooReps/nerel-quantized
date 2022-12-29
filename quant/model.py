@@ -84,7 +84,7 @@ class ModelArguments:
     reduced_dim: int = field(default=64, metadata={'help': 'Reduced token representation.'})
     max_context_length: int = field(default=None, metadata={'help': 'Context length (same as model by default)'})
     max_entity_length: int = field(default=32, metadata={'help': 'Expected maximum entity length.'})
-    entity_length_bin_factor: float = field(default=2.0, metadata={'help': 'Given factor f, bin sizes are ~ {f, f*f, f*f*f, ..., f**n}'})
+    entity_length_bin_factor: float = field(default=1.3, metadata={'help': 'Given factor f, bin sizes are ~ {f, f*f, f*f*f, ..., f**n}'})
     entity_length_embedding_dim: int = field(default=16, metadata={'help': 'Size of entity length embedding.'})
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
