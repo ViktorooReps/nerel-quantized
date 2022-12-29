@@ -87,6 +87,7 @@ class ModelArguments:
     entity_length_bin_factor: float = field(default=1.3, metadata={'help': 'Given factor f, bin sizes are ~ {f, f*f, f*f*f, ..., f**n}'})
     entity_length_embedding_dim: int = field(default=16, metadata={'help': 'Size of entity length embedding.'})
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
+    n_filters: int = field(default=8, metadata={'help': 'Filters to encode information about neighbours.'})
 
 
 class SpanNERModel(SerializableModel):
@@ -118,8 +119,11 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
+        self._start_convolution = Conv2d(1, model_args.n_filters, (3, model_args.reduced_dim), padding=(1, 0))
+        self._end_convolution = Conv2d(1, model_args.n_filters, (3, model_args.reduced_dim), padding=(1, 0))
+
         self._transition = ChunkedBilinear(
-            model_args.reduced_dim, model_args.reduced_dim, self._n_categories,
+            model_args.reduced_dim + model_args.n_filters, model_args.reduced_dim + model_args.n_filters, self._n_categories,
             embed_length=True,
             embed_dims=model_args.entity_length_embedding_dim,
             max_length=self._context_length,
@@ -247,11 +251,15 @@ class SpanNERModel(SerializableModel):
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
         start_representation = self._activation(start_representation)
+        convolved = self._start_convolution(start_representation.unsqueeze(1)).squeeze(-1).transpose(-2, -1)
+        start_representation = torch.concatenate([start_representation, convolved], dim=-1)
         start_representation = pad(start_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         end_representation = self._dropout(representation)
         end_representation = self._end_projection(end_representation)
         end_representation = self._activation(end_representation)
+        convolved = self._end_convolution(end_representation.unsqueeze(1)).squeeze(-1).transpose(-2, -1)
+        end_representation = torch.concatenate([end_representation, convolved], dim=-1)
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         # (B, NCh, Ch, Ch, C)
