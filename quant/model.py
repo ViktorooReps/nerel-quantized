@@ -118,8 +118,8 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
-        self._start_convolution = Conv2d(1, 1, (3, 1), padding='same')
-        self._end_convolution = Conv2d(1, 1, (3, 1), padding='same')
+        self._start_convolution = Conv2d(1, 1, (3, model_args.reduced_dim), padding='same')
+        self._end_convolution = Conv2d(1, 1, (3, model_args.reduced_dim), padding='same')
 
         self._transition = ChunkedBilinear(
             model_args.reduced_dim, model_args.reduced_dim, self._n_categories,
