@@ -11,9 +11,8 @@ from typing import TypeVar, Tuple, List, Type, Optional, Set, Dict, Union
 import torch
 from onnxruntime.transformers import optimizer
 from onnxruntime.transformers.fusion_options import FusionOptions
-from onnxruntime.transformers.onnx_model_bert import BertOptimizationOptions
 from torch import LongTensor, BoolTensor, Tensor
-from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear
+from torch.nn import Module, Dropout, Parameter, CrossEntropyLoss, Linear, Embedding
 from torch.nn.functional import pad
 from torch.onnx import export
 from torch.utils.data import DataLoader
@@ -24,7 +23,7 @@ from transformers.models.lxmert.modeling_lxmert import GeLU
 from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.tokenization_utils_base import EncodingFast
 
-from bilinear.chunked import ChunkedBilinear
+from nn.chunked_bilinear import ChunkedBilinear
 from quant.datamodel import TypedSpan, batch_examples, convert_all_to_examples, BatchedExamples, read_nerel, DatasetType, collate_examples
 from quant.pruner import mask_heads, prune_heads
 from quant.utils import invert, to_numpy, pad_images, FocalLoss
@@ -85,6 +84,8 @@ class ModelArguments:
     reduced_dim: int = field(default=64, metadata={'help': 'Reduced token representation.'})
     max_context_length: int = field(default=None, metadata={'help': 'Context length (same as model by default)'})
     max_entity_length: int = field(default=32, metadata={'help': 'Expected maximum entity length.'})
+    entity_length_bin_factor: float = field(default=2.0, metadata={'help': 'Given factor f, bin sizes are ~ {f, f*f, f*f*f, ..., f**n}'})
+    entity_length_embedding_dim: int = field(default=16, metadata={'help': 'Size of entity length embedding.'})
     loss_class: str = field(default='cross_entropy', metadata={'help': 'Loss class: cross_entropy or focal'})
 
 
@@ -117,8 +118,13 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
-        self._transition = ChunkedBilinear(model_args.reduced_dim, model_args.reduced_dim, self._n_categories)
-        self._chunk_mask = self._transition.output_mask(self._context_length, self._max_entity_length)
+        self._transition = ChunkedBilinear(
+            model_args.reduced_dim, model_args.reduced_dim, self._n_categories,
+            embed_length=True,
+            embed_dims=model_args.entity_length_embedding_dim,
+            max_length=self._context_length,
+            bin_factor=model_args.entity_length_bin_factor
+        )
 
         positions = torch.arange(self._context_length)
         start_positions = positions.unsqueeze(-1).repeat(1, self._context_length)
@@ -241,13 +247,11 @@ class SpanNERModel(SerializableModel):
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
         start_representation = self._activation(start_representation)
-
         start_representation = pad(start_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         end_representation = self._dropout(representation)
         end_representation = self._end_projection(end_representation)
         end_representation = self._activation(end_representation)
-
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         # (B, NCh, Ch, Ch, C)

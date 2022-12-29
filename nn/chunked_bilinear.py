@@ -1,9 +1,10 @@
 import math
 from typing import List, Optional, Tuple
 
+import numpy as np
 import torch
 from torch import Tensor, bilinear, BoolTensor, LongTensor
-from torch.nn import Module, Parameter, init, Bilinear
+from torch.nn import Module, Parameter, init, Bilinear, Embedding
 
 
 def split_into_chunks(
@@ -41,15 +42,41 @@ def split_into_chunks(
 
         indices.extend([idx] * repeat_chunks)
 
-    if drop_first:
+    # TODO: dropping chunks does not work for repeat_chunks != 2
+
+    if drop_last:
         chunks = chunks[:-1]
         indices = indices[:-1]
 
-    if drop_last:
+    if drop_first:
         chunks = chunks[1:]
         indices = indices[1:]
 
     return torch.cat(chunks, dim=dim), torch.cat(indices).long()
+
+
+def chunked_pairwise_distance(length: int, chunk_length: int, repeat_chunks: int) -> np.array:
+    n_chunks = length // chunk_length
+    extended_chunk_pairwise_distance = np.arange(repeat_chunks * chunk_length).reshape((1, -1)) - np.arange(chunk_length).reshape((-1, 1))
+
+    chunks = []
+    for chunk_i in range(repeat_chunks):
+        start_chunk = chunk_length * chunk_i
+        end_chunk = start_chunk + chunk_length
+        chunks.append(np.expand_dims(extended_chunk_pairwise_distance[:, start_chunk:end_chunk], axis=0))
+
+    # TODO: cutting out the last chunk does not work for repeat_chunks != 2
+    return np.concatenate(chunks * n_chunks, axis=0)[:-1]  # cut out the last chunk
+
+
+def create_bins(factor: float, threshold: float) -> np.ndarray:
+    x = factor
+    all_int_xs = set()
+    while x < threshold:
+        all_int_xs.add(int(x))
+        x *= factor
+
+    return np.array(sorted(all_int_xs), dtype=int)
 
 
 class ChunkedBilinear(Module):
@@ -70,21 +97,48 @@ class ChunkedBilinear(Module):
 
     Returns chunks in the order illustrated above.
     """
-    __constants__ = ['_in1_features', '_in2_features', '_out_features']
+    __constants__ = ['_in1_features', '_in2_features', '_out_features', '_embed_length', '_embed_dims']
     _in1_features: int
     _in2_features: int
     _out_features: int
+    _embed_length: bool
+    _embed_dims: int
 
-    def __init__(self, in1_features: int, in2_features: int, out_features: int, bias: bool = True):
+    def __init__(
+            self,
+            in1_features: int,
+            in2_features: int,
+            out_features: int,
+            *,
+            bias: bool = True,
+            embed_length: bool = True,
+            embed_dims: int = 20,
+            max_length: int = 512,
+            bin_factor: float = 2.0
+    ):
         super().__init__()
+        self._out_features = out_features
+        self._embed_length = embed_length
+        self._embed_dims = embed_dims
+
+        self._bins = None
+        self._from_embedding = None
+        self._to_embedding = None
+        if self._embed_length:
+            self._bins = create_bins(bin_factor, max_length)
+            self._from_embedding = Embedding(len(self._bins) + 1, self._embed_dims)
+            self._to_embedding = Embedding(len(self._bins) + 1, embed_dims)
+
+            in1_features += self._embed_dims
+            in2_features += self._embed_dims
+
         self._in1_features = in1_features
         self._in2_features = in2_features
-        self._out_features = out_features
 
         self._weight = Parameter(torch.empty(out_features, in1_features, in2_features))
         self._bias: Optional[Parameter] = None
         if bias:
-            self.bias = Parameter(torch.empty(out_features))
+            self._bias = Parameter(torch.empty(out_features))
 
         self.reset_parameters()
 
@@ -95,20 +149,33 @@ class ChunkedBilinear(Module):
             init.uniform_(self._bias, -bound, bound)
 
     def forward(self, from_x: Tensor, to_x: Tensor, chunk_length: int) -> Tuple[Tensor, Tuple[LongTensor, LongTensor]]:
-        batch_size, length, _ = from_x.shape
+        batch_size, length, from_features = from_x.shape
+        _, _, to_features = to_x.shape
 
         # chunk input sequences
 
         total_chunks = 2 * (length // chunk_length) - 1
 
-        from_chunks, row_idx = split_into_chunks(from_x, chunk_length=chunk_length, repeat_chunks=2, drop_first=True, idx_style='row')
-        to_chunks, col_idx = split_into_chunks(to_x, chunk_length=chunk_length, repeat_chunks=2, drop_last=True)
+        from_chunks, row_idx = split_into_chunks(from_x, chunk_length=chunk_length, repeat_chunks=2, drop_last=True, idx_style='row')
+        to_chunks, col_idx = split_into_chunks(to_x, chunk_length=chunk_length, repeat_chunks=2, drop_first=True, idx_style='col')
+
+        from_chunks = from_chunks.view(batch_size, -1, chunk_length, 1, from_features).repeat(1, 1, 1, chunk_length, 1)
+        to_chunks = to_chunks.view(batch_size, -1, 1, chunk_length, to_features).repeat(1, 1, chunk_length, 1, 1)
+
+        if self._embed_length:
+            idxes = np.digitize(chunked_pairwise_distance(length, chunk_length, repeat_chunks=2), self._bins)
+            idxes = torch.from_numpy(idxes).to(from_x.device)
+            from_embed = self._from_embedding(idxes).view(1, -1, chunk_length, chunk_length, self._embed_dims).repeat(batch_size, 1, 1, 1, 1)
+            to_embed = self._to_embedding(idxes).view(1, -1, chunk_length, chunk_length, self._embed_dims).repeat(batch_size, 1, 1, 1, 1)
+
+            from_chunks = torch.concatenate([from_chunks, from_embed], dim=-1)
+            to_chunks = torch.concatenate([to_chunks, to_embed], dim=-1)
 
         # process chunks in batches
 
         chunked_result = bilinear(
-            from_chunks.view(-1, chunk_length, self._in1_features).unsqueeze(-2).repeat(1, 1, chunk_length, 1),
-            to_chunks.view(-1, chunk_length, self._in2_features).unsqueeze(-3).repeat(1, chunk_length, 1, 1),
+            from_chunks.view(-1, chunk_length, chunk_length, self._in1_features),
+            to_chunks.view(-1, chunk_length, chunk_length, self._in2_features),
             weight=self._weight,
             bias=self._bias
         )
