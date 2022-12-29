@@ -118,8 +118,8 @@ class SpanNERModel(SerializableModel):
         self._end_projection = Linear(n_features, model_args.reduced_dim)
         self._activation = GeLU()
 
-        self._start_convolution = Conv1d(model_args.reduced_dim, model_args.reduced_dim, 3, padding=1)
-        self._end_convolution = Conv1d(model_args.reduced_dim, model_args.reduced_dim, 3, padding=1)
+        self._start_convolution = Conv2d(1, 1, (3, model_args.reduced_dim), padding='same')
+        self._end_convolution = Conv2d(1, 1, (3, model_args.reduced_dim), padding='same')
 
         self._transition = ChunkedBilinear(
             model_args.reduced_dim, model_args.reduced_dim, self._n_categories,
@@ -250,13 +250,13 @@ class SpanNERModel(SerializableModel):
         start_representation = self._dropout(representation)
         start_representation = self._start_projection(start_representation)
         start_representation = self._activation(start_representation)
-        start_representation = self._start_convolution(start_representation.transpose(-2, -1)).transpose(-1, -2)
+        start_representation = self._start_convolution(start_representation.unsqueeze(1)).squeeze(1)
         start_representation = pad(start_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         end_representation = self._dropout(representation)
         end_representation = self._end_projection(end_representation)
         end_representation = self._activation(end_representation)
-        end_representation = self._end_convolution(end_representation.transpose(-2, -1)).transpose(-1, -2)
+        end_representation = self._end_convolution(end_representation.unsqueeze(1)).squeeze(1)
         end_representation = pad(end_representation, [0, 0, 0, self._context_length - sequence_length, 0, 0])  # (B, M, F)
 
         # (B, NCh, Ch, Ch, C)
